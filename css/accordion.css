@@ -9,73 +9,74 @@
 }
 
 .accordion h1 {
-    padding: 16px 24px;
-    background-color: #333;
+    margin: 1px 0;
+    padding: 4px 28px;
+    background-image: url(../img/tweed.png);
+    color: whitesmoke;
+    border-radius: 6px;
+    font-family: 'Amatic SC', cursive;
+    font-weight: bold;
     font-size: 1.2rem;
     font-weight: normal;
-    color: #1abc9c;
-}
-
-.accordion h1:hover {
-    color: #4afcdc;
-}
-
-.accordion h1:first-child {
-    /*border-radius: 10px 10px 0 0;*/
-}
-
-.accordion h1:last-of-type {
-    /*border-radius: 0 0 10px 10px;*/
-}
-
-.accordion h1:not(:last-of-type) {
-    border-bottom: 1px dotted #1abc9c;
 }
 
 .accordion div, .accordion p {
     display: none;
+    position: relative;
+    font-family: 'Oxygen', sans-serif;
 }
 
 .accordion h2 {
     padding: 5px 25px;
-    background-color: #1abc9c;
-    font-size: 1.1rem;
-    color: #333;
-}
-
-.accordion h2:hover {
-    background-color: #09ab8b;
+    font-size: 14px;
+    font-weight: bold;
+    color: rgba(0, 0, 0, .7);
+    font-family: 'Oxygen', sans-serif;
 }
 
 .accordion h3 {
-    padding: 5px 30px;
-    background-color: #b94152;
-    font-size: .9rem;
-    color: #ddd;
-}
-
-.accordion h3:hover {
-    background-color: #a93142;
+    display: inline-block;
+    margin: 0 0 2px 16px;
+    padding: 0 8px 2px 24px;
+    border-radius: 10px;
+    background-image: url(../img/tweed.png);
+    color: whitesmoke;
+    font-family: 'Oxygen', sans-serif;
+    font-size: 12px;
 }
 
 .accordion h4 {
-    padding: 5px 35px;
-    background-color: #ffc25a;
-    font-size: .9rem;
-    color: #af720a;
+    position: absolute;
+    font-size: 12px;
+    font-weight: bold;
+    top: -21px;
 }
 
-.accordion h4:hover {
-    background-color: #e0b040;
+.accordion h4:nth-child(1) {
+    left: 140px;
+}
+
+.accordion h4:nth-child(3) {
+    left: 172px;
+}
+
+.accordion h4:nth-child(5) {
+    left: 204px;
 }
 
 .accordion p {
-    padding: 12px 24px;
-    background-color: #ddd;
-    /*font-family: "Georgia";*/
-    font-size: .8rem;
-    color: #333;
+    padding: 8px 24px;
+    font-size: 12px;
+    color: rgba(0, 0, 0, .7);
     line-height: 1.3rem;
+}
+
+.accordion p a.file {
+    margin-left: 16px;
+    color: rgba(0, 0, 0, .7);
+    font-family: 'Oxygen', sans-serif;
+    font-size: 12px;
+    text-decoration: none;
 }
 
 .accordion .opened {
@@ -85,15 +86,41 @@
 .accordion h1:before {
     font-family: FontAwesome;
     position: absolute;
-    color: #b61717;
+    color: whitesmoke;
     content: '\f078';
-    left: 0;
+    left: 6px;
+    font-size: 12px;
+}
+
+.accordion h2:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: rgba(0, 0, 0, .7);
+    content: '\f078';
+    left: 6px;
+    font-size: 12px;
 }
 
 .accordion h1.collapsed:before {
     font-family: FontAwesome;
     position: absolute;
-    color: #b61717;
+    color: whitesmoke;
     content: '\f054';
-    left: 0;
+    left: 6px;
+    font-size: 12px;
+}
+
+.code-examples:before {
+    font-family: FontAwesome;
+    position: absolute;
+    content: '\f121';
+    left: 23px;
+    margin-top: 1px;
+}
+
+.file:before {
+    font-family: FontAwesome;
+    position: absolute;
+    content: '\f1c9';
+    left: 28px;
 }
