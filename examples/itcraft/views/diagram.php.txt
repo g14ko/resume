@@ -1,0 +1,33 @@
+&lt;?php
+
+Yii::getClientScript()
+   -&gt;registerCssFile(Yii::getAssetManager()-&gt;publish(__DIR__ . '/plugins/figures.css'))
+   -&gt;registerCssFile(Yii::getAssetManager()-&gt;publish(__DIR__ . '/plugins/spoiler.css'))
+   -&gt;registerScriptFile(Yii::getAssetManager()-&gt;publish(__DIR__ . '/plugins/jquery.animate-shadow-min.js'), CClientScript::POS_HEAD)
+   -&gt;registerScriptFile(Yii::getAssetManager()-&gt;publish(__DIR__ . '/plugins/figures.js'), CClientScript::POS_HEAD)
+   -&gt;registerScriptFile(Yii::getAssetManager()-&gt;publish(__DIR__ . '/plugins/spoiler.js'), CClientScript::POS_HEAD);
+
+/**
+ * @var DocController $this
+ * @var array         $menu
+ * @var array         $blocks
+ */
+
+
+&lt;div id="diagram-wrapper"&gt;
+
+    &lt;a id="mode-edit" href="#"&gt;&lt;i class="icon-edit-sign"&gt;&lt;/i&gt;&lt;/a&gt;
+
+    &lt;?php $this-&gt;renderPartial('menu', array('menu' =&gt; $menu)); ?&gt;
+
+    &lt;div class="diagram-box diagram-&lt;?= $columns ?&lt;-column"&gt;
+
+        &lt;?php foreach ($blocks as $block): ?&gt;
+            &lt;?php $this-&gt;renderPartial('blocks/' . $block['type'], $block); ?&gt;
+        &lt;?php endforeach; ?&gt;
+
+    &lt;/div&gt;
+
+    &lt;a id="link-on-top" href="#"&gt;&lt;i class="icon-double-angle-up"&gt;&lt;/i&gt;&lt;/a&gt;
+
+&lt;/div&gt;

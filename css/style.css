@@ -1,0 +1,308 @@
+*,
+*:after,
+*::before {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Monaco, Menlo, Consolas, 'Courier New', monospace;
+    background: url(../img/debut_light.png);
+
+}
+
+@font-face {
+    font-family: 'FontAwesome';
+    src: url('../font/fontawesome-webfont.eot?v=3.2.1');
+    src: url('../font/fontawesome-webfont.eot?#iefix&v=3.2.1') format('embedded-opentype'), url('../font/fontawesome-webfont.woff?v=3.2.1') format('woff'), url('../font/fontawesome-webfont.ttf?v=3.2.1') format('truetype'), url('../font/fontawesome-webfont.svg#fontawesomeregular?v=3.2.1') format('svg');
+    font-weight: normal;
+    font-style: normal;
+}
+
+/* Responsibilities styles */
+.responsibilities ul li {
+    position: relative;
+    padding-left: 16px;
+}
+
+.responsibilities ul li:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #b61717;
+    content: '\f054';
+    left: 0;
+}
+
+.responsibilities ul li.expanded:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #b61717;
+    content: '\f078';
+    left: 0;
+}
+
+.responsibilities ul li ol li:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #b61717;
+    content: '\f00c';
+    left: 0;
+}
+
+.code-examples:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #4afcdc;
+    content: '\f121';
+    left: 8px;
+}
+
+.company:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #b61717;
+    content: '\f0f7';
+    left: 8px;
+}
+
+.file:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #b61717;
+    content: '\f1c9';
+    left: 8px;
+}
+
+
+#avatar {
+    padding: 16px;
+    float: left;
+}
+
+#avatar img {
+    width: 96px;
+    border: 5px solid whitesmoke;
+    box-shadow: 0 0 3px #999999;
+}
+
+#developer {
+    position: relative;
+    float: right;
+    width: 512px;
+    margin-top: 12px;
+}
+
+#developer p {
+    position: relative;
+}
+
+#developer span {
+    margin-left: 28px;
+}
+
+.date:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #337ab7;
+    content: '\f073';
+    left: 12px;
+    top: 4px;
+}
+
+.city:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #337ab7;
+    content: '\f041';
+    left: 12px;
+    top: 4px;
+}
+
+.mobile:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #337ab7;
+    content: '\f095';
+    left: 12px;
+    top: 4px;
+}
+
+.email:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #337ab7;
+    content: '\f0e0';
+    left: 12px;
+    top: 4px;
+}
+
+.skype:before {
+    font-family: FontAwesome;
+    position: absolute;
+    color: #337ab7;
+    content: '\f17e';
+    left: 12px;
+    top: 4px;
+}
+
+.label {
+    display: inline;
+    padding: .15em .6em .15em;
+    margin-right: 4px;
+    font-size: .9em;
+    font-weight: 700;
+    line-height: 1;
+    color: #fff;
+    text-align: center;
+    white-space: nowrap;
+    vertical-align: baseline;
+    border-radius: .25em;
+    background-color: #337ab7;
+}
+
+pre {
+    display: block;
+    padding: 9.5px;
+    margin: 0 0 10px;
+    font-size: 13px;
+    line-height: 1.42857143;
+    color: #333;
+    word-break: break-all;
+    word-wrap: break-word;
+    background-color: #f5f5f5;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+}
+
+pre code {
+    padding: 0;
+    font-size: inherit;
+    color: inherit;
+    white-space: pre-wrap;
+    background-color: transparent;
+    border-radius: 0;
+}
+
+/* Logo styles */
+
+aside > a {
+    position: relative;
+}
+
+aside > a > img.company {
+    width: 250px;
+    padding: 3px;
+    border: solid 1px #EFEFEF;
+}
+
+aside > a:hover > img.company {
+    -moz-box-shadow: 1px 1px 3px #999;
+    -webkit-box-shadow: 1px 1px 3px #999;
+    box-shadow: 1px 1px 3px #999;
+}
+
+aside > a > img.company.itcraft {
+    height: 80px;
+}
+
+aside > a > img.company.leads {
+    height: 48px;
+}
+
+aside > a > img.company.turbosms {
+    height: 38px;
+}
+
+aside > a > img.company.qualium-systems {
+    height: 48px;
+}
+
+aside > a:hover:after,
+aside > a:focus:after {
+    position: absolute;
+    bottom: 3px;
+    left: 3px;
+    display: block;
+    width: 244px;
+    height: 16px;
+    content: attr(alt);
+    font-size: 8px;
+    font-weight: bold;
+    line-height: 16px;
+    text-align: center;
+    color: #000;
+    background: rgba(255, 255, 255, .9);
+}
+
+aside > a:hover img,
+aside > a:focus img {
+    outline: 1px solid #ccc;
+}
+
+/* Avatar styles */
+
+#name {
+    position: absolute;
+    top: 20px;
+    left: 128px;
+    font-size: 18px;
+}
+
+#objective {
+    float: left;
+    width: 100%;
+    text-align: center;
+}
+
+#objective a {
+    position: relative;
+    display: block;
+    margin-top: -12px;
+    outline: none;
+    color: blueviolet;
+    text-decoration: none;
+    font-weight: 400;
+    text-shadow: 0 0 1px rgba(255, 255, 255, .3);
+    font-size: 1.2em;
+}
+
+#objective a:hover,
+#objective a:focus {
+    outline: none;
+}
+
+#objective a::before,
+#objective a::after {
+    display: inline-block;
+    opacity: 0;
+    -webkit-transition: -webkit-transform 0.3s, opacity 0.2s;
+    -moz-transition: -moz-transform 0.3s, opacity 0.2s;
+    transition: transform 0.3s, opacity 0.2s;
+}
+
+#objective a::before {
+    margin-right: 10px;
+    content: '[';
+    -webkit-transform: translateX(20px);
+    -moz-transform: translateX(20px);
+    transform: translateX(20px);
+}
+
+#objective a::after {
+    margin-left: 10px;
+    content: ']';
+    -webkit-transform: translateX(-20px);
+    -moz-transform: translateX(-20px);
+    transform: translateX(-20px);
+}
+
+#objective a:hover::before,
+#objective a:hover::after,
+#objective a:focus::before,
+#objective a:focus::after {
+    opacity: 1;
+    -webkit-transform: translateX(0px);
+    -moz-transform: translateX(0px);
+    transform: translateX(0px);
+}

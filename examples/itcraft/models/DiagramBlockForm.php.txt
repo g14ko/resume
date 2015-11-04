@@ -1,0 +1,182 @@
+&lt;?php
+
+class DiagramBlockForm extends CFormModel
+{
+
+    public $id;
+    public $type;
+    public $class;
+    public $content;
+    public $url;
+    // arrows and texts
+    public $a_up;
+    public $a_up_text;
+    public $a_right;
+    public $a_right_text;
+    public $a_down;
+    public $a_down_text;
+    public $a_left;
+    public $a_left_text;
+
+    private static $types = array(
+        'initial',
+        'empty',
+        'conditional',
+        'end',
+        'rectangle',
+        'parallelogram'
+    );
+
+    public function rules()
+    {
+        return array(
+            array('id, type', 'required'),
+            array('class, url, content', 'length', 'max' =&gt; 127),
+            array('type', 'in', 'range' =&gt; array_keys(self::$types)),
+            array('a_up, a_right, a_down, a_left', 'in', 'range' =&gt; array(0, 1)),
+            array('a_up_text, a_right_text, a_down_text, a_left_text', 'length', 'max' =&gt; 5),
+        );
+    }
+
+    /**
+     * @return array customized attribute labels (name=&gt;label)
+     */
+    public function attributeLabels()
+    {
+        return array(
+            'id' =&gt; 'ID',
+            'type' =&gt; 'type',
+            'class' =&gt; 'Class',
+            'content' =&gt; 'Text',
+            'url' =&gt; 'Link href',
+            'a_up' =&gt; CHtml::tag('i', array('class' =&gt; 'icon-arrow-up'), ''),
+            'a_right' =&gt; CHtml::tag('i', array('class' =&gt; 'icon-arrow-right'), ''),
+            'a_down' =&gt; CHtml::tag('i', array('class' =&gt; 'icon-arrow-down'), ''),
+            'a_left' =&gt; CHtml::tag('i', array('class' =&gt; 'icon-arrow-left'), '')
+        );
+    }
+
+    public function beforeValidate()
+    {
+        return parent::beforeValidate();
+    }
+
+    public function getArrows(array $attributes)
+    {
+        $values = array(
+            'arrows' =&gt; ''
+        );
+        $mapping = array('U' =&gt; 'a_up', 'R' =&gt; 'a_right', 'D' =&gt; 'a_down', 'L' =&gt; 'a_left');
+        foreach ($mapping as $dir =&gt; $attribute)
+        {
+            !$attributes[$attribute] || $values['arrows'] .= $dir;
+            $key = 'text_' . strtolower($dir);
+            $values[$key] = $attributes[$attribute . '_text'];
+        }
+
+        return $values;
+    }
+
+    public function setArrows(array $block)
+    {
+        foreach (str_split($block['arrows']) as $direction)
+        {
+            switch ($direction)
+            {
+                case 'U':
+                    $this-&gt;setAttributes(array(
+                        'a_up' =&gt; 1,
+                        'a_up_text' =&gt; $block['text_u']
+                    ));
+                    break;
+                case 'R':
+                    $this-&gt;setAttributes(array(
+                        'a_right' =&gt; 1,
+                        'a_right_text' =&gt; $block['text_r']
+                    ));
+                    break;
+                case 'D':
+                    $this-&gt;setAttributes(array(
+                        'a_down' =&gt; 1,
+                        'a_down_text' =&gt; $block['text_d']
+                    ));
+                    break;
+                case 'L':
+                    $this-&gt;setAttributes(array(
+                        'a_left' =&gt; 1,
+                        'a_left_text' =&gt; $block['text_l']
+                    ));
+                    break;
+            }
+        }
+    }
+
+    /**
+     * @param string $attribute
+     * @param array  $params
+     */
+    public function validateAlias($attribute, array $params)
+    {
+        if (!$this-&gt;$attribute)
+        {
+            $this-&gt;addError($attribute, 'empty alias');
+        }
+        if (self::existsAlias($this-&gt;$attribute))
+        {
+            $this-&gt;addError($attribute, 'alias exists');
+        }
+    }
+
+    public function getType($key)
+    {
+        return array_key_exists($key, self::$types) ? self::$types[$key] : '';
+    }
+
+    public function getTypes()
+    {
+        return self::$types;
+    }
+
+    /**
+     * @return array
+     */
+    private function getDiagrams()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT id, name FROM block_diagram_items'
+        )-&gt;queryAll(true);
+    }
+
+    /**
+     * @param $id
+     *
+     * @return bool
+     */
+    private static function existsDiagramID($id)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'SELECT 1 FROM block_diagrams WHERE id = :id'
+        )-&gt;queryScalar(array(':id' =&gt; $id));
+    }
+
+    /**
+     * @param $alias
+     *
+     * @return bool
+     */
+    private static function existsAlias($alias)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'SELECT 1 FROM block_diagrams WHERE alias = :alias'
+        )-&gt;queryScalar(array(':alias' =&gt; $alias));
+    }
+
+    /**
+     * @return CDbConnection
+     */
+    private static function db()
+    {
+        return Yii::app()-&gt;getDb();
+    }
+
+}

@@ -1,0 +1,841 @@
+&lt;?php
+
+/**
+ * Поиск вебмастеров с зафиксированными аттрибутами из "черного списка",
+ * и при нахождении пометить их как "Под подозрением".
+ * User: Гичко Евгений
+ * Date: 09.07.14
+ * Time: 9:08
+ */
+
+namespace common\modules\monitor\components;
+
+use \Yii;
+
+Yii::import('queue.components.queueworkers.common.Worker');
+
+use \CHtml;
+use \Worker;
+use \CController;
+use \common\enums\StatusEnum;
+use \common\models\ar\Notifications;
+use \common\enums\NotificationTypeEnum;
+use \webmaster\models\ar\extended\User as AffiliateUser;
+use \common\models\ar\Employees;
+
+final class SuspiciousAffiliatesWorker extends Worker
+{
+    const EMAIL = 'email';
+    const PHONE = 'phone';
+    const SIGNUP_IP = 'signup_ip';
+    const PLATFORM_URL = 'platform_url';
+    const E_WALLET = 'e_wallet';
+    const BANK_DETAILS = 'bank_details';
+
+    const YANDEX_MONEY_TYPE_ID = 1;
+    const WEBMONEY_TYPE_ID = 2;
+    const BANK_TYPE_ID = 3;
+
+    const TABLE_BLOCKED_USERS = 'affiliate_blocked_users';
+    const TABLE_BLOCKED_IPS = 'affiliate_blocked_ips';
+    const TABLE_BLOCKED_PLATFORMS = 'affiliate_blocked_platforms';
+    const TABLE_BLOCKED_E_WALLETS = 'affiliate_blocked_e_wallets';
+    const TABLE_BLOCKED_BANK_TRANSFERS = 'affiliate_blocked_bank_transfers';
+
+    private static $params = [
+        self::EMAIL =&gt; 'Почта',
+        self::PHONE =&gt; 'Номер телефона',
+        self::SIGNUP_IP =&gt; 'IP регистрации',
+        self::PLATFORM_URL =&gt; 'URL адрес платформы',
+        self::E_WALLET =&gt; 'Электронный кошелёк',
+        self::BANK_DETAILS =&gt; 'Банковские реквизиты'
+    ];
+
+    private static $columns = [
+        self::EMAIL =&gt; self::TABLE_BLOCKED_USERS,
+        self::PHONE =&gt; self::TABLE_BLOCKED_USERS,
+        self::SIGNUP_IP =&gt; self::TABLE_BLOCKED_IPS,
+        self::PLATFORM_URL =&gt; self::TABLE_BLOCKED_PLATFORMS,
+        self::E_WALLET =&gt; self::TABLE_BLOCKED_E_WALLETS,
+        self::BANK_DETAILS =&gt; self::TABLE_BLOCKED_BANK_TRANSFERS
+    ];
+
+    private static $notifications = [];
+    private static $founded = [];
+    private static $whiteList = [];
+
+    protected function _beforeRun()
+    {
+        self::setWhiteListIPs();
+    }
+
+    /**
+     * Установить "белый" список IPs
+     */
+    public static function setWhiteListIPs()
+    {
+        self::$whiteList = self::getWhiteListIPs();
+    }
+
+    protected function _proceedRun($param = '')
+    {
+        switch (true) {
+            case !empty($param):
+                !self::isAvailableParam($param)
+                    ?
+                    $this-&gt;_storeResult(self::getErrorMessage($param), self::STATUS_NOT_INIT)
+                    :
+                    $this-&gt;_storeResult(self::getResultMessage(self::executeByParam($param)), self::STATUS_SUCCESS);
+                break;
+            default:
+                $this-&gt;_storeResult(self::getResultMessage(self::executeAll()), self::STATUS_SUCCESS);
+        }
+    }
+
+    /**
+     * Возвращает итоговое сообщение
+     * @param int $count Количество найденных и помеченных вебмастеров
+     * @return string Итоговое сообщение
+     */
+    public static function getResultMessage($count)
+    {
+        return sprintf('Найдены "подозрительные" вебмастера в количестве: %s', $count);
+    }
+
+    /**
+     * Возвращает сообщение с ошибкой
+     * @param string $param Название параметра
+     * @return string Сообщение с ошибкой
+     */
+    public static function getErrorMessage($param)
+    {
+        return sprintf('Входящий параметр "%s" неверен', $param);
+    }
+
+    /**
+     * Входящий параметр доступен ?
+     * @param string $param Входящий параметр
+     * @return bool Параметр доступен ? &lt;code&gt;true&lt;/code&gt; - да
+     */
+    public static function isAvailableParam($param)
+    {
+        return array_key_exists($param, self::$params);
+    }
+
+    /**
+     * Возвращает количество помеченных вебмастеров, как "подозрительные"
+     * @return int Количество помеченных вебмастеров, как "подозрительные"
+     */
+    public static function executeAll()
+    {
+        foreach (self::getParams() as $param) {
+            self::executeByParam($param, false, false);
+        }
+        !empty(self::$notifications) && self::sendNotificationToAdmin();
+
+        return count(self::$founded);
+    }
+
+    /**
+     * Возвращает количество помеченных вебмастеров, как "подозрительные" по заданному параметру
+     * @param string $param Алиас параметра
+     * @param bool   $sendNotifications Отослать уведомления админам ? true - да, по умолчанию - true
+     * @param bool   $clearCounter Сбросить счетчик подсчета количества вебмастеров ? true - да, по умолчанию - true
+     * @return int Количество помеченных вебмастеров по заданному параметру
+     */
+    public static function executeByParam($param, $sendNotifications = true, $clearCounter = true)
+    {
+        if (!self::isAvailableParam($param)) {
+            return self::getErrorMessage($param);
+        }
+        !$clearCounter || self::$founded = [];
+        $method = self::getMethodNameByAlias($param);
+        if (method_exists(__CLASS__, $method)) {
+            $label = self::getLabel($param);
+            foreach (self::$method() as $suspicious) {
+                $blocked = self::getBlockedAffiliates($param, $suspicious[$param]);
+                $hint = self::getDistrustHint($label, $suspicious[$param], $blocked);
+                !self::isUntrustedAffiliate($suspicious['id'])
+                    ?
+                    self::markAsUntrustedAffiliate($suspicious, $param, $hint) && self::addNotifications($param, $suspicious, $blocked)
+                    :
+                    self::appendHintToUntrustedAffiliate($suspicious, $param, $hint);
+                self::$founded[$suspicious['id']] = $suspicious;
+            }
+        }
+        $sendNotifications && !empty(self::$notifications) && self::sendNotificationToAdmin($label);
+
+        return count(self::$founded);
+    }
+
+    /**
+     * Получить белый список IPs
+     * @return array Белый список IPs
+     */
+    public static function getWhiteListIPs()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT ip FROM white_list_ips'
+        )-&gt;queryColumn();
+    }
+
+    /**
+     * Добавить уведомления в список уведомлений для отправки.
+     * @param string $param Название (алиас) параметра
+     * @param array  $affiliate Атрибуты подозрительного вебмастера
+     * @param array  $blockedAffiliates Атрибуты заблокированных вебмастеров
+     * @return void
+     */
+    private static function addNotifications($param, array $affiliate, array $blockedAffiliates)
+    {
+        foreach ($blockedAffiliates as $blockedAffiliate) {
+            self::addNotification($param, $affiliate, $blockedAffiliate);
+        }
+    }
+
+    /**
+     * Добавить уведомление в список уведомлений для отправки.
+     * @param string $param Название (алиас) параметра
+     * @param array  $affiliate Атрибуты подозрительного вебмастера
+     * @param array  $banned Атрибуты заблокированного вебмастера
+     * @return void
+     */
+    private static function addNotification($param, array $affiliate, array $banned)
+    {
+        switch (true) {
+            case !isset(self::$notifications[$affiliate['id']]):
+                self::$notifications[$affiliate['id']] = [
+                    'suspicious_affiliate' =&gt; [
+                        'link' =&gt; self::linkOnAffiliate($affiliate['id'], $affiliate['name']),
+                        'text' =&gt; $affiliate['id'] . ', ' . $affiliate['name']
+                    ],
+                    'params' =&gt; [
+                        $param =&gt; [
+                            'label' =&gt; self::getLabel($param),
+                            'values' =&gt; [
+                                $affiliate[$param] =&gt; [
+                                    $banned['id'] =&gt; [
+                                        'link' =&gt; self::linkOnAffiliate($banned['id'], $banned['name']),
+                                        'text' =&gt; $banned['id'] . ', ' . $banned['name']
+                                    ]
+                                ]
+                            ]
+                        ]
+                    ]
+                ];
+                break;
+            case !isset(self::$notifications[$affiliate['id']]['params'][$param]):
+                self::$notifications[$affiliate['id']]['params'][$param] = [
+                    'label' =&gt; self::getLabel($param),
+                    'values' =&gt; [
+                        $affiliate[$param] =&gt; [
+                            $banned['id'] =&gt; [
+                                'link' =&gt; self::linkOnAffiliate($banned['id'], $banned['name']),
+                                'text' =&gt; $banned['id'] . ', ' . $banned['name']
+                            ]
+                        ]
+                    ]
+                ];
+                break;
+            case !isset(self::$notifications[$affiliate['id']]['params'][$param]['values'][$affiliate[$param]]):
+                self::$notifications[$affiliate['id']]['params'][$param]['values'][$affiliate[$param]] = [
+                    $banned['id'] =&gt; [
+                        'link' =&gt; self::linkOnAffiliate($banned['id'], $banned['name']),
+                        'text' =&gt; $banned['id'] . ', ' . $banned['name']
+                    ]
+                ];
+                break;
+            case !isset(self::$notifications[$affiliate['id']]['params'][$param]['values'][$affiliate[$param]][$banned['id']]):
+                self::$notifications[$affiliate['id']]['params'][$param]['values'][$affiliate[$param]][$banned['id']] = [
+                    'link' =&gt; self::linkOnAffiliate($banned['id'], $banned['name']),
+                    'text' =&gt; $banned['id'] . ', ' . $banned['name']
+                ];
+                break;
+        }
+    }
+
+    /**
+     * Возвращает ссылку на вебмастера
+     * @param int    $id ID вебмастера
+     * @param string $name Название компании вебмастера
+     * @return string Ссылка на вебмастера
+     */
+    private static function linkOnAffiliate($id, $name)
+    {
+        return CHtml::link(
+            $name,
+            Yii::app()-&gt;settings-&gt;get('manager.site_url') . '/webmasters/default/view/' . (int)$id,
+            ['target' =&gt; '_blank']
+        );
+    }
+
+    /**
+     * Добавить причину блокировки
+     * @param array  $affiliate Атрибуты вебмастера
+     * @param string $param Алиас параметра
+     * @param array  $hint Причина блокировки
+     * @return bool Добавлена причину блокировки ? &lt;code&gt;true&lt;/code&gt; - да
+     */
+    private static function appendHintToUntrustedAffiliate(array $affiliate, $param, array $hint)
+    {
+        $oldHint = self::getOldDistrustHint($affiliate['id']);
+        $oldHint = !empty($oldHint) ? unserialize($oldHint) : [];
+        $hint = self::mergeDistrustHint($oldHint, $hint, $param, $affiliate[$param]);
+
+        return (bool)self::db()-&gt;createCommand(
+            'UPDATE affiliates SET distrust_hint=:hint WHERE id=:aid'
+        )-&gt;execute(
+            [
+                ':aid' =&gt; $affiliate['id'],
+                ':hint' =&gt; serialize($hint)
+            ]
+        );
+    }
+
+    /**
+     * Обьеденить старую подсказку с только что найденной
+     * @param array  $hints Массив старых подсказок
+     * @param array  $hint Новая подсказка
+     * @param string $param Название параметра
+     * @param string $value Значение параметра
+     * @return array Подсказки о подозрительном вебсмастере
+     */
+    private static function mergeDistrustHint(array $hints, array $hint, $param, $value)
+    {
+        switch (true) {
+            case empty($hints) || !isset($hints[$param]):
+                $hints[$param] = $hint;
+                break;
+            case !isset($hints[$param]['values'], $hints[$param]['values'][$value]):
+                $hints[$param]['values'][$value] = $hint['values'][$value];
+                break;
+            case array_keys($hints[$param]['values'][$value]) != array_keys($hint['values'][$value]):
+                $hints[$param]['values'][$value] = $hints[$param]['values'][$value] + $hint['values'][$value];
+                break;
+        }
+
+        return $hints;
+    }
+
+    /**
+     * Возвращает старые подсказки о подозрительном вебмастере
+     * @param int $affiliateID ID вебмастера
+     * @return string Сериализованные старые подсказки о подозрительном вебмастере
+     */
+    private static function getOldDistrustHint($affiliateID)
+    {
+        return (string)self::db()-&gt;createCommand(
+            'SELECT distrust_hint FROM affiliates WHERE id=:aid'
+        )-&gt;queryScalar([':aid' =&gt; $affiliateID]);
+    }
+
+    /**
+     * Пометить вебмастера, как "подозрительный" и указать причину блокировки
+     * @param array  $affiliate Атрибуты вебмастера
+     * @param string $param Алиас параметра
+     * @param array  $hint Причина блокировки
+     * @return bool Вебмастер помечен как "подозрительный" ? &lt;code&gt;true&lt;/code&gt; - да
+     */
+    private static function markAsUntrustedAffiliate(array $affiliate, $param, array $hint)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'UPDATE affiliates SET is_distrust=:distrust, distrust_hint=:hint WHERE id=:aid'
+        )-&gt;execute(
+            [
+                ':aid' =&gt; $affiliate['id'],
+                ':distrust' =&gt; (int)true,
+                ':hint' =&gt; serialize([$param =&gt; $hint])
+            ]
+        );
+    }
+
+    /**
+     * Вебмастер помечен как "подозрительный" ?
+     * @param $affiliateID ID вебмастера
+     * @return bool Вебмастер помечен как "подозрительный" ? &lt;code&gt;true&lt;/code&gt; - да
+     */
+    private static function isUntrustedAffiliate($affiliateID)
+    {
+        return (bool)self::db()-&gt;createCommand('SELECT is_distrust FROM affiliates WHERE id=:aid')-&gt;queryScalar([':aid' =&gt; $affiliateID]);
+    }
+
+    /**
+     * Возвращает название метода для нахождения "подозрительных" вебмастеров по параметру
+     * @param string $alias Алиас параметра
+     * @return string Название метода для нахождения "подозрительных" вебмастеров по параметру
+     */
+    private static function getMethodNameByAlias($alias)
+    {
+        $method = 'getAffiliatesWithSuspicious';
+
+        return !strpos($alias, '_')
+            ?
+            $method . ucfirst($alias)
+            :
+            $method . join('', array_map('ucfirst', explode('_', $alias)));
+    }
+
+    /**
+     * Возвращает вебмастеров с почтой из черного листа
+     * @return array Список вебмастеров с почтой из черного листа
+     * &lt;dl&gt;
+     * &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     * &lt;dt&gt;[string] email&lt;/dt&gt;&lt;dd&gt;Почта вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании вебмастера&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getAffiliatesWithSuspiciousEMail()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+ 				a.id,
+             	DATE_FORMAT(a.modified,"%Y-%m-%d") date,
+             	au.email,
+             	a.company name
+         	FROM affiliates a
+			JOIN affiliate_users au ON au.affiliate_id=a.id AND au.is_creator = 1 AND a.status = :active AND au.email != ""
+			JOIN affiliate_blocked_users abu ON abu.email = au.email AND abu.deleted = 0
+			GROUP BY a.id'
+        )-&gt;queryAll(true, [':active' =&gt; StatusEnum::STATUS_ACTIVE]);
+    }
+
+    /**
+     * Возвращает вебмастеров с номером телефона из черного листа
+     * @return array Список вебмастеров с номером телефона из черного листа
+     * &lt;dl&gt;
+     * &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     * &lt;dt&gt;[string] phone&lt;/dt&gt;&lt;dd&gt;Номер телефона вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании вебмастера&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getAffiliatesWithSuspiciousPhone()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+ 				a.id,
+             	DATE_FORMAT(a.modified,"%Y-%m-%d") date,
+             	a.cell_phone phone,
+             	a.company name
+         	FROM affiliates a
+			JOIN affiliate_users au ON au.affiliate_id = a.id AND au.is_creator = 1 AND a.status = :active
+			JOIN affiliate_blocked_users abu ON abu.phone = a.cell_phone AND abu.deleted = 0 AND a.cell_phone != ""
+			GROUP BY a.id'
+        )-&gt;queryAll(true, [':active' =&gt; StatusEnum::STATUS_ACTIVE]);
+    }
+
+    /**
+     * Возвращает вебмастеров с IP регистрации или входа из черного листа
+     * @return array Список вебмастеров с IP регистрации или входа из черного листа
+     * &lt;dl&gt;
+     * &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     * &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании&lt;/dd&gt;
+     * &lt;dt&gt;[string] signup_ip&lt;/dt&gt;&lt;dd&gt;IP регистрации или входа вебмастера&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getAffiliatesWithSuspiciousSignupIp()
+    {
+        return self::db()-&gt;createCommand(
+            sprintf(
+                'SELECT
+					a.id,
+					DATE_FORMAT(a.modified, :date_format) date,
+					a.company name,
+					a.signup_ip
+				FROM affiliates a
+				JOIN affiliate_blocked_ips abi ON abi.ip = a.signup_ip AND abi.deleted = 0 AND a.signup_ip != "" %s
+				WHERE a.status = :active GROUP BY a.id
+				UNION
+					SELECT
+						a.id,
+						DATE_FORMAT(a.modified, :date_format) date,
+						a.company name,
+						lh.ip signup_ip
+					FROM affiliates a
+					JOIN login_history AS lh ON lh.account_id =a.id AND lh.manager_id IS NULL AND lh.ip != "" %s
+					JOIN affiliate_blocked_ips abi ON abi.deleted = 0 AND abi.ip = lh.ip
+					WHERE a.status = :active GROUP BY a.id',
+                !empty(self::$whiteList) ? sprintf(
+                    'AND a.signup_ip NOT IN (%s)',
+                    join(
+                        ',',
+                        array_map(
+                            function ($ip) {
+                                return "'" . $ip . "'";
+                            },
+                            self::$whiteList
+                        )
+                    )
+                ) : '',
+                !empty(self::$whiteList) ? sprintf(
+                    'AND lh.ip NOT IN (%s)',
+                    join(
+                        ',',
+                        array_map(
+                            function ($ip) {
+                                return "'" . $ip . "'";
+                            },
+                            self::$whiteList
+                        )
+                    )
+                ) : ''
+            )
+        )-&gt;queryAll(
+            true,
+            [
+                ':active' =&gt; StatusEnum::STATUS_ACTIVE,
+                ':date_format' =&gt; '%Y-%m-%d'
+            ]
+        );
+    }
+
+    /**
+     * Возвращает вебмастеров с URL адресом платформы из черного листа
+     * @return array Список вебмастеров с URL адресом платформы из черного листа
+     * &lt;dl&gt;
+     * &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     * &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании&lt;/dd&gt;
+     * &lt;dt&gt;[string] platform_url&lt;/dt&gt;&lt;dd&gt;URL адрес платформы вебмастера&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getAffiliatesWithSuspiciousPlatformUrl()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+			  a.id,
+			  DATE_FORMAT(a.modified, "%Y-%m-%d") date,
+			 a.company name,
+			 ap.source_url platform_url
+			FROM affiliates a
+			LEFT JOIN affiliate_platforms ap ON ap.affiliate_id = a.id AND a.status = :active
+			WHERE ap.source_url != "" AND ap.source_url IN (SELECT url FROM affiliate_blocked_platforms WHERE deleted = 0)
+			GROUP BY a.id'
+        )-&gt;queryAll(true, [':active' =&gt; StatusEnum::STATUS_ACTIVE]);
+    }
+
+    /**
+     * Возвращает вебмастеров с кошельком из черного листа
+     * @return array Список вебмастеров с кошельком из черного листа
+     * &lt;dl&gt;
+     * &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     * &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании&lt;/dd&gt;
+     * &lt;dt&gt;[string] e_wallet&lt;/dt&gt;&lt;dd&gt;Электронный кошелёк вебмастера&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getAffiliatesWithSuspiciousEWallet()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+				a.id,
+				DATE_FORMAT(a.modified, "%Y-%m-%d") date,
+				a.company name,
+				abw.wallet e_wallet
+			FROM affiliates a
+			LEFT JOIN affiliate_payment_data apd ON a.id = apd.affiliate_id AND apd.payment_type_id IN (:yandex, :webmoney)
+			JOIN affiliate_blocked_e_wallets abw ON abw.type_id = apd.payment_type_id AND abw.wallet = apd.data AND abw.deleted = 0
+			WHERE a.status = :active AND apd.data != ""
+			GROUP BY a.id'
+        )-&gt;queryAll(
+            true,
+            [
+                ':active' =&gt; StatusEnum::STATUS_ACTIVE,
+                ':yandex' =&gt; self::YANDEX_MONEY_TYPE_ID,
+                ':webmoney' =&gt; self::WEBMONEY_TYPE_ID
+            ]
+        );
+    }
+
+    /**
+     * Возвращает вебмастеров с банковскими реквизитами из черного листа
+     * @return array Список вебмастеров с кошельками из черного листа
+     * &lt;dl&gt;
+     * &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     * &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     * &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании&lt;/dd&gt;
+     * &lt;dt&gt;[string] bank_details&lt;/dt&gt;&lt;dd&gt;Банк получателя вебмастера&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getAffiliatesWithSuspiciousBankDetails()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+				a.id,
+				DATE_FORMAT(a.modified, "%Y-%m-%d") date,
+				a.company name,
+				abt.settlement_account bank_details
+			FROM affiliates a
+			LEFT JOIN affiliate_payment_data apd ON apd.affiliate_id = a.id AND apd.payment_type_id = :bank
+			JOIN affiliate_blocked_bank_transfers abt ON INSTR(apd.data, abt.settlement_account) &gt; 1 AND abt.deleted = 0
+			WHERE a.status = :active AND apd.data != ""
+			GROUP BY a.id'
+        )-&gt;queryAll(true, [':active' =&gt; StatusEnum::STATUS_ACTIVE, ':bank' =&gt; self::BANK_TYPE_ID]);
+    }
+
+    /**
+     * Добавить дату и причину блокировки вебмастера
+     * @param array $blocked Ссылка на список заблокированных вебмастеров
+     * @return void
+     */
+    private static function addDatesAndReasons(array &$blocked)
+    {
+        foreach ($blocked as $key =&gt; $affiliate) {
+            $add = self::getDateAndReason($affiliate['id']);
+            $add || $add = self::getEmptyDateAndMissingReason();
+            $blocked[$affiliate['id']] = array_merge($add, $affiliate);
+            if ($key != $affiliate['id']) {
+                unset($blocked[$key]);
+            }
+        }
+    }
+
+    /**
+     * Получить пустую дату и отсутствующую причину блокировки вебмастера
+     * @return array Пустая дата и отсутствующая причина блокировки вебмастера
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[string] reason&lt;/dt&gt;&lt;dd&gt;Нет истории статусов&lt;/dd&gt;
+     *  &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;0000-00-00 00:00:00&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getEmptyDateAndMissingReason()
+    {
+        return [
+            'reason' =&gt; 'Нет истории статусов',
+            'date' =&gt; '0000-00-00 00:00:00'
+        ];
+    }
+
+    /**
+     * Возвращает дату и причину блокировки вебмастера
+     * @param int $affiliateID ID вебмастера
+     * @return array Дата и причина блокировки вебмастера
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[string] reason&lt;/dt&gt;&lt;dd&gt;Причина блокировки вебмастера&lt;/dd&gt;
+     *  &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки вебмастера, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getDateAndReason($affiliateID)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+					 ash.comment reason,
+					 ash.created date
+				FROM account_status_history ash
+				WHERE ash.account_id = :aid AND ash.account_type=:affiliate AND ash.status = :blocked
+				ORDER BY ash.id DESC LIMIT 1'
+        )-&gt;queryRow(
+            true,
+            [
+                ':aid' =&gt; (int)$affiliateID,
+                ':affiliate' =&gt; AffiliateUser::TYPE,
+                ':blocked' =&gt; StatusEnum::STATUS_BLOCKED
+            ]
+        );
+    }
+
+    /**
+     * Возвращает комментарий для пометки вебмастера
+     * @param string $label Название параметра из черного листа
+     * @param string $value Значение параметра из черного листа
+     * @param array  $blocked Атрибуты заблокированных вебмастеров
+     *                          &lt;dl&gt;
+     *                          &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID заблокированного вебмастера&lt;/dd&gt;
+     *                          &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании заблокированного вебмастера&lt;/dd&gt;
+     *                          &lt;dt&gt;[string] date&lt;/dt&gt;&lt;dd&gt;Дата блокировки, формата &lt;code&gt;Y-m-d&lt;/code&gt;&lt;/dd&gt;
+     *                          &lt;dt&gt;[string] reason&lt;/dt&gt;&lt;dd&gt;Причина блокировки заблокированного вебмастера&lt;/dd&gt;
+     *                          &lt;/dl&gt;
+     * @return array Комментарий для пометки вебмастера
+     * &lt;code&gt;
+     *  [
+     *      'label' =&gt; $label,
+     *      'values' =&gt; [
+     *          $value =&gt; $blocked_affiliates
+     *      ]
+     *  ]
+     * &lt;/code&gt;
+     */
+    private static function getDistrustHint($label, $value, array $blocked)
+    {
+        return [
+            'label' =&gt; $label,
+            'values' =&gt; [$value =&gt; $blocked]
+        ];
+    }
+
+    /**
+     * Возвращает название таблицы из "черного списка" для поиска заблокированного вебмастера
+     * @param string $columnName Название параметра
+     * @return string  Название таблицы из "черного списка" для поиска заблокированного вебмастера
+     */
+    private static function getBlockedTableName($columnName)
+    {
+        return isset(self::$columns[$columnName]) ? self::$columns[$columnName] : '';
+    }
+
+    /**
+     * Корректировка названий параметров соответствующих названий колонок
+     * @param string $columnName Название параметра
+     * @return string Название колонки таблицы из "черного списка"
+     */
+    private static function correctedColumnName($columnName)
+    {
+        switch (true) {
+            case $columnName == self::SIGNUP_IP:
+                return 'ip';
+            case $columnName == self::BANK_DETAILS:
+                return 'settlement_account';
+            case $columnName == self::PLATFORM_URL:
+                return 'url';
+            case $columnName == self::E_WALLET:
+                return 'wallet';
+            default:
+                return $columnName;
+        }
+    }
+
+    /**
+     * Возвращает атрибуты заблокированных вебмастеров с подозрительным параметром
+     * @param string $column Название колонки для поиска
+     * @param string $value Значение параметра
+     * @return array Атрибуты заблокированных вебмастеров
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[array] Атрибуты заблокированного вебмастера&lt;/dt&gt;&lt;dd&gt;
+     *   &lt;dl&gt;
+     *    &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     *    &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании вебмастера&lt;/dd&gt;
+     *   &lt;/dl&gt;
+     *  &lt;dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getBlockedAffiliates($column, $value)
+    {
+        $affiliates = self::getBlockedAffiliatesWithSuspiciousParam($column, $value);
+        self::addDatesAndReasons($affiliates);
+
+        return $affiliates;
+    }
+
+    /**
+     * Возвращает атрибуты заблокированного вебмастера
+     * @param string $column Название колонки для поиска
+     * @param string $value Значение параметра
+     * @return array Атрибуты заблокированного вебмастера
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID вебмастера&lt;/dd&gt;
+     *  &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании вебмастера&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getBlockedAffiliatesWithSuspiciousParam($column, $value)
+    {
+        return self::db()-&gt;createCommand(
+            sprintf(
+                'SELECT
+					ab.affiliate_id id,
+					abu.name
+				FROM %s ab
+				JOIN affiliate_blocked_users abu ON abu.affiliate_id = ab.affiliate_id AND ab.%s = :value AND ab.deleted = 0
+				GROUP BY id',
+                self::getBlockedTableName($column),
+                self::correctedColumnName($column)
+            )
+        )-&gt;queryAll(true, [':value' =&gt; $value]);
+    }
+
+    /**
+     * Возвращает параметры по которым проверяем черный список
+     * @return array Список параметры по которым проверяем черный список
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[string] Ключ&lt;/dt&gt;&lt;dd&gt;Алиас параметра&lt;/dd&gt;
+     *  &lt;dt&gt;[string] Значение&lt;/dt&gt;&lt;dd&gt;Название параметра&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getParams()
+    {
+        return array_keys(self::$params);
+    }
+
+    /**
+     * Возвращает название параметра
+     * @param string $alias Алиас параметра
+     * @return string Название параметра
+     */
+    private static function getLabel($alias)
+    {
+        return isset(self::$params[$alias]) ? self::$params[$alias] : null;
+    }
+
+    /**
+     * Возвращает ссылку на соединение с БД
+     * @return \CDbConnection Ссылка на соединение с БД
+     */
+    private static function db()
+    {
+        return Yii::app()-&gt;getDb();
+    }
+
+    /**
+     * Уведомить письмом и СМС админов о "подозрительном" вебмастере
+     * @param string $label Название найденного подозрительного параметра
+     * @return void
+     */
+    private static function sendNotificationToAdmin($label = '')
+    {
+        $controller = new CController('YiiMail');
+        $label = !empty($label)
+            ?
+            'Найден вебмастер с подозрительным параметром: ' . $label
+            :
+            'Найден вебмастер с подозрительными параметрами';
+        Notifications::notificationCreateAndSend(
+            NotificationTypeEnum::TYPE_SYSTEM,
+            0,
+            0,
+            1,
+            $label,
+            self::renderMessageAsHtml($controller),
+            self::renderMessageAsText($controller),
+            0,
+            0,
+            0,
+            0,
+            Employees::getActiveAdminIDs(),
+            0
+        );
+    }
+
+    /**
+     * Возвращает сообщение о найденном подозрительном вебмастере, как текст
+     * @param CController $controller Модель контроллера
+     * @return string Сообщение о найденном подозрительном вебмастере, как текст
+     */
+    private static function renderMessageAsText(CController $controller)
+    {
+        return $controller-&gt;renderInternal(
+            Yii::getPathOfAlias('common.modules.monitor.views.sms') . '/suspicious_affiliates.php',
+            [
+                'founded' =&gt; self::$founded
+            ],
+            true
+        );
+    }
+
+    /**
+     * Возвращает сообщение о найденном подозрительном вебмастере, как HTML
+     * @param CController $controller Модель контроллера
+     * @return string Сообщение о найденном подозрительном вебмастере, как HTML
+     */
+    private static function renderMessageAsHtml(CController $controller)
+    {
+        return $controller-&gt;renderInternal(
+            Yii::getPathOfAlias('common.modules.monitor.views.mail') . '/suspicious_affiliates.php',
+            [
+                'notifications' =&gt; self::$notifications
+            ],
+            true
+        );
+    }
+
+}

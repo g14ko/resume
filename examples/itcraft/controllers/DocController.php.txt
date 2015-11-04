@@ -1,0 +1,339 @@
+&lt;?php
+
+class DocController extends Controller
+{
+	public function init()
+	{
+		parent::init();
+
+        $this-&gt;setLayout('column2');
+        $this-&gt;setDefaultAction('diagrams');
+	}
+
+    public function actionDiagrams()
+    {
+        $this-&gt;setPageTitle('Block diagrams');
+        $this-&gt;setBreadCrumbs(array('Block diagrams'));
+
+        $this-&gt;setMenu(array(
+            array('label' =&gt; self::icon('plus') . 'create', 'url' =&gt; array('/dev/diagram/create')),
+        ));
+
+        $diagrams = self::getDiagrams();
+
+        $this-&gt;render('diagrams', array('diagrams' =&gt; new CArrayDataProvider($diagrams, array(
+            'id' =&gt; 'diagrams-provider',
+            'keyField' =&gt; 'id'
+        ))));
+    }
+
+    public function actionDiagram($alias = 'crawl-sites')
+    {
+        if (!self::hasDiagram($alias))
+        {
+            throw new Exception('diagram not found');
+        }
+
+        $this-&gt;setPageTitle('Diagram');
+        $this-&gt;setBreadCrumbs(array('Block diagrams'));
+
+        $this-&gt;setMenu(array(
+            array('label' =&gt; self::icon('list-ul') . 'to list', 'url' =&gt; array('/dev/doc/')),
+            array('label' =&gt; self::icon('plus') . 'create', 'url' =&gt; array('/dev/diagram/create')),
+            array('label' =&gt; self::icon('pencil') . 'edit', 'url' =&gt; array('/dev/diagram/edit?alias=' . $alias)),
+        ));
+
+        $diagram = self::getDiagram($alias);
+
+        $blocks = self::getDiagramBlocks($diagram['id']);
+        $blocks = self::collectBlocks($blocks);
+
+        $params = array(
+            'alias' =&gt; $alias,
+            'menu' =&gt; self::getDiagramBreadcrumbs($alias),
+            'columns' =&gt; $diagram['columns'],
+            'blocks' =&gt; $blocks
+        );
+
+        $this-&gt;render('diagram', $params);
+    }
+
+    private static function icon($class)
+    {
+        return CHtml::tag('i', array(
+            'style' =&gt; 'font-size:12px;margin-right:8px;opacity:.9;',
+            'class' =&gt; 'icon-' . $class,
+        ), '');
+    }
+
+    public function actionList($alias)
+    {
+        $this-&gt;setPageTitle('Diagram list');
+        $this-&gt;setBreadCrumbs(array($alias));
+        $this-&gt;setMenu(array(
+            array('label' =&gt; self::icon('list-ul') . 'to list', 'url' =&gt; array('/dev/doc/')),
+        ));
+
+        $this-&gt;render('list', array(
+            'menu' =&gt; self::getDiagramBreadcrumbs($alias),
+            'content' =&gt; $this-&gt;renderList($alias)
+        ));
+    }
+
+    private function renderList($alias)
+    {
+        $method = 'render' . str_replace('-', '', $alias);
+        if (!method_exists($this, $method))
+        {
+            return 'not implemented';
+        }
+
+        return $this-&gt;$method();
+    }
+
+    /**
+     * Get config
+     *
+     * @param string $alias alias of path
+     *
+     * @return array config
+     */
+    private static function config($alias = '')
+    {
+        static $config = array();
+        if (!$config)
+        {
+            $filepath = Yii::app()-&gt;getBasePath(true) . '/config/crawl.php';
+            !empty($config) || !file_exists($filepath) || $config = require $filepath;
+        }
+
+        if (!empty($alias))
+        {
+            foreach (explode('.', $alias) as $key)
+            {
+                if (!isset($config[$key]))
+                {
+                    break;
+                }
+                $config = $config[$key];
+            }
+        }
+
+        return $config;
+    }
+
+    private function renderBannedLinks()
+    {
+        $hosts = array();
+        $i = 1;
+        foreach (self::config('deny.hosts') as $domain =&gt; $links)
+        {
+            foreach ($links as $link)
+            {
+                $hosts[] = array(
+                    'id' =&gt; $i,
+                    'domain' =&gt; $domain,
+                    'link' =&gt; $link,
+                );
+                $i++;
+            }
+        }
+
+        return $this-&gt;renderPartial('banned-links', array(
+            'hosts' =&gt; new CArrayDataProvider($hosts, array(
+                'id' =&gt; 'banned-links-provider',
+                'keyField' =&gt; 'id'
+            )),
+        ), true);
+    }
+
+    private function renderApplicationLinks()
+    {
+        $schemas = array();
+        foreach (self::config('deny.schemas') as $i =&gt; $schema)
+        {
+            $schemas[] = array(
+                'id' =&gt; $i,
+                'schema' =&gt; $schema
+            );
+        }
+
+        return $this-&gt;renderPartial('schemas', array(
+            'schemas' =&gt; new CArrayDataProvider($schemas, array(
+                'id' =&gt; 'application-links-provider',
+                'keyField' =&gt; 'id'
+            )),
+        ), true);
+    }
+
+    private function renderTagAttributes()
+    {
+        $i = 0;
+        $list = array();
+        foreach (Form::getTagAttributes() as $tag =&gt; $attributes)
+        {
+            foreach ($attributes as $attribute)
+            {
+                $i++;
+                $list[] = array(
+                    'id' =&gt; $i,
+                    'tag' =&gt; $tag,
+                    'attribute' =&gt; $attribute,
+                );
+            }
+        }
+
+        return $this-&gt;renderPartial('tag-attributes', array(
+            'attributes' =&gt; new CArrayDataProvider($list, array(
+                'id' =&gt; 'tag-attributes-provider',
+                'keyField' =&gt; 'id'
+            )),
+        ), true);
+    }
+
+    private function renderForbiddenExtensions()
+    {
+        $extensions = array();
+        foreach (self::config('deny.extensions') as $i =&gt; $extension)
+        {
+            $extensions[] = array(
+                'id' =&gt; $i,
+                'extension' =&gt; $extension
+            );
+        }
+
+        return $this-&gt;renderPartial('extensions', array(
+            'extensions' =&gt; new CArrayDataProvider($extensions, array(
+                'id' =&gt; 'forbidden-extensions-provider',
+                'keyField' =&gt; 'id'
+            )),
+        ), true);
+    }
+
+    private static function getDiagramBreadcrumbs($alias)
+    {
+        $breadcrumbs = array();
+        $breadcrumb = self::getBreadCrumb($alias);
+        $parent_id = $breadcrumb['parent_id'];
+
+        while($parent_id && $parent = self::getBreadCrumbById($parent_id))
+        {
+            $breadcrumbs[$parent['name']] = self::createAbsUrl('dev/doc/' . $parent['type'], array('alias' =&gt; $parent['alias']));
+            $parent_id = $parent['parent_id'];
+        }
+
+        $breadcrumbs = array_reverse($breadcrumbs,true);
+        $breadcrumbs[] = $breadcrumb['name'];
+
+        return $breadcrumbs;
+    }
+
+    private static function getBreadCrumbById($id)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT bdb.*, bd.name, bd.alias
+                FROM block_diagram_breadcrumbs bdb
+                JOIN block_diagrams bd ON bd.id = bdb.block_diagram_id
+                WHERE bdb.id = :id'
+        )-&gt;queryRow(true, array(':id' =&gt; $id));
+    }
+
+    private static function getBreadCrumb($alias)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT bdb.*, bd.name
+                FROM block_diagram_breadcrumbs bdb
+                JOIN block_diagrams bd ON bd.id = bdb.block_diagram_id
+                WHERE bd.alias = :alias'
+        )-&gt;queryRow(true, array(':alias' =&gt; $alias));
+    }
+
+    private static function collectBlocks(array $items)
+    {
+        $blocks = array();
+        foreach ($items as $item)
+        {
+            foreach (array('class', 'content', 'url', 'type') as $key)
+            {
+                $block[$key] = !empty($item[$key]) ? $item[$key] : '';
+            }
+            $block['arrows'] = array();
+            if (!empty($item['arrows']))
+            {
+                foreach (str_split($item['arrows']) as $dir)
+                {
+                    $dir = strtolower($dir);
+                    switch ($dir)
+                    {
+                        case 'u':
+                            $ar_dir = 'up';
+                            break;
+                        case 'r':
+                            $ar_dir = 'right';
+                            break;
+                        case 'd':
+                            $ar_dir = 'down';
+                            break;
+                        case 'l':
+                            $ar_dir = 'left';
+                            break;
+                    }
+                    $block['arrows'][$ar_dir] = !empty($item['text_' . $dir]) ? $item['text_' . $dir] : '';
+                }
+            }
+            array_push($blocks, $block);
+        }
+
+        return $blocks;
+    }
+
+    private static function getDiagramBlocks($id)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+                `type`,
+                `class`,
+                content,
+                url,
+                arrows,
+                text_u,
+                text_r,
+                text_d,
+                text_l
+            FROM block_diagram_items WHERE block_diagram_id = :id ORDER BY row ASC, `column` ASC'
+        )-&gt;queryAll(true, array(':id' =&gt; $id));
+    }
+
+    private static function getDiagram($alias)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT `id`, `columns`, `name` FROM block_diagrams WHERE alias = :alias'
+        )-&gt;queryRow(true, array(':alias' =&gt; $alias));
+    }
+
+    private static function hasDiagram($alias)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'SELECT 1 FROM block_diagrams WHERE alias = :alias'
+        )-&gt;queryScalar(array('alias' =&gt; $alias));
+    }
+
+    private static function getDiagrams()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+              bd.id, bd.alias, bd.name, bd.columns
+              FROM block_diagrams bd
+                JOIN block_diagram_breadcrumbs bdb ON bdb.block_diagram_id = bd.id
+              WHERE bdb.parent_id = 0'
+        )-&gt;queryAll();
+    }
+
+    public static function createAbsUrl($path = 'dev/doc/diagram', $params = array(), $protocol = null)
+    {
+        $protocol || $protocol = substr($_SERVER["SERVER_PROTOCOL"], 0, strpos($_SERVER["SERVER_PROTOCOL"], '/'));
+
+        return strtolower(Yii::app()-&gt;createAbsoluteUrl($path, $params, $protocol));
+    }
+
+}

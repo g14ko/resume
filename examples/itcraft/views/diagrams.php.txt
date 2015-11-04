@@ -1,0 +1,50 @@
+&lt;?php
+/**
+ * @var array $diagrams
+ */
+
+$this-&gt;widget('bootstrap.widgets.TbGridView', array(
+    'id' =&gt; 'diagram-blocks',
+    'type' =&gt; 'condensed',
+    'dataProvider' =&gt; $diagrams,
+//    'afterAjaxUpdate' =&gt; 'function(){diagrams.events()}',
+    'columns' =&gt; array(
+        array(
+            'header' =&gt; '#',
+            'type' =&gt; 'raw',
+            'value' =&gt; 'CHtml::encode($data["id"])'
+        ),
+        array(
+            'name' =&gt; 'name',
+            'type' =&gt; 'raw',
+            'value' =&gt; 'CHtml::encode($data["name"])',
+            'htmlOptions' =&gt; array('style' =&gt; 'text-transform: capitalize')
+        ),
+        array(
+            'name' =&gt; 'alias',
+            'type' =&gt; 'raw',
+            'value' =&gt; 'CHtml::encode($data["alias"])'
+        ),
+        array(
+            'header' =&gt; CHtml::link('', '#', array('class' =&gt; 'refresh-grid icon-refresh', 'title' =&gt; 'refresh grid', 'style' =&gt; 'text-align:center')),
+            'class' =&gt; 'CButtonColumn',
+            'template' =&gt; '{view} {edit}',
+            'headerHtmlOptions' =&gt; array('style' =&gt; 'width:70px'),
+            'buttons' =&gt; array
+            (
+                'view' =&gt; array(
+                    'imageUrl' =&gt; false,
+                    'label' =&gt; '',
+                    'url' =&gt; 'Yii::app()-&gt;createUrl("dev/doc/diagram", array("alias"=&gt;$data["alias"]))',
+                    'options' =&gt; array('class' =&gt; 'icon-eye-open')
+                ),
+                'edit' =&gt; array(
+                    'imageUrl' =&gt; false,
+                    'label' =&gt; '',
+                    'url' =&gt; 'Yii::app()-&gt;createUrl("dev/diagram/edit", array("alias"=&gt;$data["alias"]))',
+                    'options' =&gt; array('class' =&gt; 'icon-pencil')
+                ),
+            )
+        )
+    ),
+));

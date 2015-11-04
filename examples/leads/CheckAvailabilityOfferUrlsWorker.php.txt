@@ -1,0 +1,463 @@
+&lt;?php
+/**
+ * Воркер проверки посадочных страниц офферов на доступность
+ * User: Гичко Евгений
+ * Date: 22.08.14
+ * Time: 11:36
+ */
+
+namespace common\modules\monitor\components;
+
+use \Yii;
+use \Worker;
+use \CLogger;
+use \Exception;
+use \EHttpClient;
+use \EHttpResponse;
+use \EHttpClientException;
+use \common\enums\StatusEnum;
+use \common\models\ar\Employees;
+use \CApplicationComponent as Component;
+use \common\modules\monitor\models\Notifications;
+use \common\enums\HttpStatusCodeEnum as HttpStatus;
+
+Yii::import('repository.EHttpClient.*');
+Yii::import('queue.components.queueworkers.common.Worker');
+
+class CheckAvailabilityOfferUrlsWorker extends Worker
+{
+    const CACHE_ID = 'unavailable_offer_urls';
+
+    private static $url;
+    private static $client;
+    private static $response;
+    private static $notifications = [];
+    private static $count = 0;
+    private static $textIsFound;
+
+    protected function _proceedRun()
+    {
+        $this-&gt;_storeResult(self::getResultMessage(self::execute()), self::STATUS_SUCCESS);
+    }
+
+    /**
+     * Запустить воркер
+     * @return int Количество недоступных УРЛ-ов посадочных страниц офферов
+     */
+    public static function execute()
+    {
+        $ids = self::checkAvailabilityUrls(self::getActiveOffers());
+        !empty($ids) && self::checkAvailabilityUrls(self::getAdditionalUrls($ids), false);
+        !empty(self::$notifications) && self::sendNotifications();
+
+        return self::$count;
+    }
+
+    /**
+     * Проверка доступности УРЛов посадочных страниц офферов
+     * @param array $offers Атрибуты офферов
+     *                       &lt;dl&gt;
+     *                       &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID оффера || ID URLa оффера&lt;/dd&gt;
+     *                       &lt;dt&gt;[int] offer_id&lt;/dt&gt;&lt;dd&gt;ID оффера || не задан&lt;/dd&gt;
+     *                       &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название посадочной страницы&lt;/dd&gt;
+     *                       &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес посадочной страницы&lt;/dd&gt;
+     *                       &lt;dt&gt;[string] text&lt;/dt&gt;&lt;dd&gt;Проверочный текст&lt;/dd&gt;
+     *                       &lt;/dl&gt;
+     * @param bool  $isMain Основная посадочная страница ? true - да, по умолчанию - true
+     * @return array Массив IDs офферов
+     */
+    private static function checkAvailabilityUrls(array $offers, $isMain = true)
+    {
+        !$isMain || $ids = [];
+        foreach ($offers as $offer) {
+            try {
+                self::validateUrl($offer['url']);
+                self::setUrl($offer['url']);
+                if (!self::isAvailableUrl(self::getUrl(), $offer['text'])) {
+                    self::addNotification($offer, $isMain);
+                    self::$count++;
+                }
+                self::saveResponse($offer['id'], $isMain);
+                !$isMain || array_push($ids, $offer['id']);
+            } catch (Exception $e) {
+                self::clearStatus($offer['id'], $isMain);
+                self::log($e-&gt;getMessage(), $offer, $isMain);
+                continue;
+            } catch (EHttpClientException $e) {
+                self::log($e-&gt;getMessage(), $offer, $isMain);
+                continue;
+            }
+        }
+
+        return $isMain ? $ids : null;
+    }
+
+    /**
+     * Проверка доступности УРЛа посадочной страницы оффера
+     * @param string $url УРЛ посадочной страницы
+     * @param string $text Проверочный текст на посадочной странице
+     * @return bool УРЛ посадочной страницы доступен ? true - да
+     */
+    private static function isAvailableUrl($url, $text)
+    {
+        self::client()-&gt;resetParameters();
+        self::client()-&gt;setUri($url);
+        self::issetQuery() && self::client()-&gt;setParameterGet(self::getParams());
+        self::setResponse(self::client()-&gt;request(EHttpClient::GET));
+        $status = self::response()-&gt;getStatus() == HttpStatus::STATUS_OK;
+        self::$textIsFound = !$status || empty($text) || strpos(self::response()-&gt;getBody(), $text) !== false;
+
+        return $status && self::$textIsFound;
+    }
+
+    /**
+     * Сохранить код статуса ответа и дату проверки посадочной страницы в offers
+     * @param int  $id ID оффера || ID URLа оффера
+     * @param bool $isMain Основная посадочная страница ? true - да
+     * @return bool Данные сохранены ? true - да
+     */
+    private static function saveResponse($id, $isMain = true)
+    {
+        $table = !$isMain ? 'offer_urls' : 'offers';
+
+        return (bool)self::db()-&gt;createCommand(
+            "UPDATE {$table}
+			SET
+				response_status_code = :code,
+				response_status_message = :message,
+				last_checked = CURRENT_TIMESTAMP
+			 WHERE id = :id"
+        )-&gt;execute(
+            [
+                ':id' =&gt; $id,
+                ':code' =&gt; self::$textIsFound ? self::response()-&gt;getStatus() : 0, // custom code status, rev: magic number
+                ':message' =&gt; self::response()-&gt;getMessage()
+            ]
+        );
+    }
+
+    /**
+     * Очистить статус проверки URL посадочной страницы
+     * @param int  $id ID оффера || ID URLа оффера
+     * @param bool $isMain Основная посадочная страница ? true - да
+     * @return bool Очищен статус проверки ? true - да
+     */
+    public static function clearStatus($id, $isMain)
+    {
+        $table = !$isMain ? 'offer_urls' : 'offers';
+
+        return (bool)self::db()-&gt;createCommand(
+            "UPDATE  {$table}
+			SET
+				response_status_code = null,
+				response_status_message = null,
+				last_checked = :date
+			 WHERE id = :id"
+        )-&gt;execute(
+            [
+                ':id' =&gt; $id,
+                ':date' =&gt; '0000-00-00 00:00:00'
+            ]
+        );
+    }
+
+    /**
+     * Уведомить админов о нахождении недоступных посадочных страниц
+     * @return void
+     */
+    private static function sendNotifications()
+    {
+        self::notificationsHasChanged()
+        && Notifications::sendToEmployees(
+            'unavailable_offer_urls',
+            'Найдены недоступные посадочные страницы у офферов',
+            [
+                'notifications' =&gt; self::$notifications,
+                'count' =&gt; self::$count
+            ],
+            Employees::getActiveAdminIDs()
+        );
+        Yii::app()-&gt;getCache()-&gt;set(self::CACHE_ID, md5(serialize(self::$notifications)), 60 * 60 * 24);
+    }
+
+    /**
+     * Проверка изменилось ли уведомление о недоступности УРЛов за последние сутки
+     * @return bool Уведомление изменилось ? true - да
+     */
+    private static function notificationsHasChanged()
+    {
+        return Yii::app()-&gt;getCache()-&gt;get(self::CACHE_ID) != md5(serialize(self::$notifications));
+    }
+
+    /**
+     * Возвращает итоговое сообщение
+     * @param int $count Количество найденных недоступных лендингов
+     * @return string Итоговое сообщение
+     */
+    public static function getResultMessage($count)
+    {
+        return sprintf('Найдены недоступные посадочные страницы офферов в количестве: %s', $count);
+    }
+
+    /**
+     * Добавить недоступный URL посадочной страницы
+     * @param array $offer Атрибуты оффера
+     *                     &lt;dl&gt;
+     *                     &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID оффера&lt;/dd&gt;
+     *                     &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название посадочной страницы&lt;/dd&gt;
+     *                     &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес посадочной страницы&lt;/dd&gt;
+     *                     &lt;dt&gt;[string] text&lt;/dt&gt;&lt;dd&gt;Проверочный текст&lt;/dd&gt;
+     *                     &lt;/dl&gt;
+     * @param bool  $isMain Основная посадочная страница ? true - да
+     * @return void
+     */
+    private static function addNotification($offer, $isMain)
+    {
+        $offerID = !$isMain ? $offer['offer_id'] : $offer['id'];
+        switch (true) {
+            case !isset(self::$notifications[$offerID]):
+                self::$notifications[$offerID] = [self::addAdditionalData($offer)];
+                break;
+            default:
+                array_push(self::$notifications[$offerID], self::addAdditionalData($offer));
+        }
+    }
+
+    /**
+     * Добавить дополнительные данные к атрибутам оффера
+     * @param array $offer Атрибуты оффера для уведомления
+     *                      &lt;dl&gt;
+     *                      &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID оффера&lt;/dd&gt;
+     *                      &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название посадочной страницы&lt;/dd&gt;
+     *                      &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес посадочной страницы&lt;/dd&gt;
+     *                      &lt;dt&gt;[string] text&lt;/dt&gt;&lt;dd&gt;Проверочный текст&lt;/dd&gt;
+     *                      &lt;/dl&gt;
+     * @return array Атрибуты оффера для уведомления
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID оффера&lt;/dd&gt;
+     *  &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название посадочной страницы&lt;/dd&gt;
+     *  &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес посадочной страницы&lt;/dd&gt;
+     *  &lt;dt&gt;[string] text&lt;/dt&gt;&lt;dd&gt;Проверочный текст&lt;/dd&gt;
+     *  &lt;dt&gt;[string] status&lt;/dt&gt;&lt;dd&gt;Код статуса ответа сервера&lt;/dd&gt;
+     *  &lt;dt&gt;[bool] text_is_found&lt;/dt&gt;&lt;dd&gt;Проверочный текст не задан или найден или страница не доступна  ? true - да&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function addAdditionalData(array $offer)
+    {
+        $offer['status'] = self::response()-&gt;getStatus();
+        $offer['text_is_found'] = self::$textIsFound;
+
+        return $offer;
+    }
+
+    /**
+     * Разобрать строку запроса и сохранить
+     * @param string $url Строка запроса
+     * @return void
+     */
+    private static function setUrl($url)
+    {
+        self::$url = parse_url($url);
+    }
+
+    /**
+     * Получить URL адрес запроса
+     * @return string URL адрес запроса
+     */
+    private static function getUrl()
+    {
+        $url = self::$url['scheme'] . '://' . self::$url['host'];
+        !empty(self::$url['path']) && $url .= self::replaceParams(self::$url['path']);
+
+        return $url;
+    }
+
+    /**
+     * Получить список атрибутов активных офферов
+     * @return array[] Список активных офферов
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID оффера&lt;/dd&gt;
+     *  &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название оффера&lt;/dd&gt;
+     *  &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес посадочной страницы&lt;/dd&gt;
+     *  &lt;dt&gt;[string] text&lt;/dt&gt;&lt;dd&gt;Проверочный текст&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getActiveOffers()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+				id,
+				name,
+				offer_url url,
+				check_text text
+			 FROM offers
+			 WHERE status = :active'
+        )-&gt;queryAll(true, [':active' =&gt; StatusEnum::STATUS_ACTIVE]);
+    }
+
+    /**
+     * Получить все УРЛы посадочных страниц офферов
+     * @param array $ids Массив IDs активных офферов
+     * @return array[] Массив атрибутов офферов
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID URL оффера&lt;/dd&gt;
+     *  &lt;dt&gt;[int] offer_id&lt;/dt&gt;&lt;dd&gt;ID оффера&lt;/dd&gt;
+     *  &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название оффера&lt;/dd&gt;
+     *  &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес посадочной страницы&lt;/dd&gt;
+     *  &lt;dt&gt;[string] text&lt;/dt&gt;&lt;dd&gt;Проверочный текст&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getAdditionalUrls(array $ids)
+    {
+        return self::db()-&gt;createCommand(
+            sprintf(
+                'SELECT
+					id,
+					offer_id,
+					name,
+					offer_url url,
+					check_text text
+				 FROM offer_urls
+				 WHERE status = :active AND offer_id IN (%s)',
+                join(',', $ids)
+            )
+        )-&gt;queryAll(true, [':active' =&gt; StatusEnum::STATUS_ACTIVE]);
+    }
+
+    /**
+     * Проверить URL на валидность
+     * @param string $url URL адрес
+     * @return void
+     * @throws Exception Ошибка URL адрес не валиден
+     */
+    private static function validateUrl($url)
+    {
+        if (!filter_var($url, FILTER_VALIDATE_URL)) {
+            throw new Exception('URL адрес не валиден');
+        }
+    }
+
+    /**
+     * Подставить значения для параметров запроса
+     * @param string $params Параметры запроса
+     * @param string $value Значение, по умодчанию - 123
+     * @return string Параметры запроса с подставленными значениями
+     */
+    private static function replaceParams($params, $value = '123')
+    {
+        return preg_replace('/\{([a-z0-9_]+?)\}/i', $value, $params);
+    }
+
+    /**
+     * Проверить заданы ли параметры запроса
+     * @return bool Заданы ли параметры запроса ? true - да
+     */
+    private static function issetQuery()
+    {
+        return !empty(self::$url['query']);
+    }
+
+    /**
+     * Получить параметры запроса
+     * @return array Параметры запроса
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[string] key&lt;/dt&gt;&lt;dd&gt;Название параметра&lt;/dd&gt;
+     *  &lt;dt&gt;[string] value&lt;/dt&gt;&lt;dd&gt;Значение параметра&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getParams()
+    {
+        parse_str(self::replaceParams(self::$url['query']), $params);
+
+        return (array)$params;
+    }
+
+    /**
+     * Создать и вернуть HTTP клиент
+     * @return EHttpClient HTTP клиент
+     */
+    private static function getClient()
+    {
+        return new EHttpClient(
+            null,
+            [
+                'adapter' =&gt; 'EHttpClientAdapterCurl',
+                'maxredirects' =&gt; 10,
+                'curloptions' =&gt; [
+                    CURLOPT_COOKIEFILE =&gt; 'cookie.txt',
+                    CURLOPT_COOKIEJAR =&gt; 'cookie.txt',
+                    CURLOPT_SSL_VERIFYPEER =&gt; false,
+                    CURLOPT_SSL_VERIFYHOST =&gt; false
+                ]
+            ]
+        );
+    }
+
+    /**
+     * Сохранить HTTP ответ
+     * @param EHttpResponse $response HTTP ответ
+     * @return EHttpResponse HTTP ответ
+     */
+    private static function setResponse($response)
+    {
+        return self::$response = $response;
+    }
+
+    /**
+     * Получить ссылку на HTTP ответ
+     * @return EHttpResponse Ссылка на HTTP ответ
+     */
+    private static function response()
+    {
+        return self::$response;
+    }
+
+    /**
+     * Возвращает ссылку на HTTP клиент
+     * @return EHttpClient Ссылка на HTTP клиент
+     */
+    private static function client()
+    {
+        !self::$client && self::$client = self::getClient();
+
+        return self::$client;
+    }
+
+    /**
+     * Логирование ошибок
+     * @param string $message Сообщение об ошибке
+     * @param array  $offer Атрибуты оффера
+     *                     &lt;dl&gt;
+     *                     &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID оффера || ID URL аоффера&lt;/dd&gt;
+     *                     &lt;dt&gt;[int] id&lt;/dt&gt;&lt;dd&gt;ID оффера || не задан&lt;/dd&gt;
+     *                     &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название оффера&lt;/dd&gt;
+     *                     &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес посадочной страницы&lt;/dd&gt;
+     *                     &lt;dt&gt;[string] text&lt;/dt&gt;&lt;dd&gt;Проверочный текст&lt;/dd&gt;
+     *                     &lt;/dl&gt;
+     * @param bool   $isMain Основная посадочная страница ? true - да
+     * @return void
+     */
+    private static function log($message, array $offer, $isMain)
+    {
+        Yii::log(
+            sprintf(
+                'Ошибка при проверке оффера (ID %s): %s%sПосадочной страницы: %s',
+                !$isMain ? $offer['offer_id'] : $offer['id'],
+                $message,
+                PHP_EOL,
+                $offer['url']
+            ),
+            CLogger::LEVEL_ERROR
+        );
+    }
+
+    /**
+     * Возвращает ссылку на соединение с БД
+     * @return \CDbConnection Ссылка на соединение с БД
+     */
+    private static function db()
+    {
+        return Yii::app()-&gt;getDb();
+    }
+
+}

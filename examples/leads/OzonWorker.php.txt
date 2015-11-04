@@ -1,0 +1,283 @@
+&lt;?php
+/**
+ * Воркер синхронизации OZON
+ * User: Гичко Евгений
+ * Date: 12.08.14
+ * Time: 15:37
+ */
+
+Yii::import('queue.components.queueworkers.advsync.BaseWorker');
+
+use \Yii;
+use \common\enums\StatusDetailEnum;
+use \common\models\ConversionManager;
+
+final class OzonWorker extends BaseWorker
+{
+    const MODE_DAILY = 'daily';
+
+    private static $client;
+
+    protected static $mapping = [
+        'status' =&gt; [
+            OzonStatus::DONE =&gt; StatusDetailEnum::STATUS_APPROVE_SYNC,
+            OzonStatus::CANCELED =&gt; StatusDetailEnum::STATUS_REJECTED_SCORING_EXTERNAL,
+            OzonStatus::WAIT =&gt; StatusDetailEnum::STATUS_PENDING_IN_PROGRESS,
+            OzonStatus::WAIT_CANCELED =&gt; StatusDetailEnum::STATUS_REJECTED_SCORING_EXTERNAL
+        ]
+    ];
+
+    private static $columnIndexes = [
+        self::COLUMN_ADV_SUB =&gt; 0,
+        self::COLUMN_STATUS =&gt; 1,
+        self::COLUMN_ADVERTISER_STATUS =&gt; 2,
+        self::COLUMN_TRANSACTION_ID =&gt; 3,
+        self::COLUMN_AMOUNT =&gt; 4,
+        self::COLUMN_CREATED =&gt; 5,
+        self::COLUMN_CREATED_FRIENDLY =&gt; 6
+    ];
+
+    protected static function initCM($data)
+    {
+        $cm = new ConversionManager(Yii::app()-&gt;getDb(), $data);
+        $cm-&gt;createConversionByTransactionId = true;
+
+        return $cm;
+    }
+
+    /**
+     * Перегрузил метод инициализации
+     * @param array $params Массив параметров воркера
+     * @return void
+     */
+    public static function initialize(array $params = [])
+    {
+        parent::initialize($params);
+        self::initMode();
+        self::setSoapClient();
+    }
+
+    /**
+     * Инициализация режима работы воркера
+     */
+    private static function initMode()
+    {
+        isset(self::$params['mode']) && self::$params['mode'] == self::MODE_DAILY
+        && self::$startDate = (new DateTime())-&gt;sub(new DateInterval('P1D'))-&gt;format(self::$formatDate);
+    }
+
+    /**
+     * Переопределил метод получения и формирования данных по конверсиям
+     * @return array Данные по конверсиям
+     */
+    public static function getData()
+    {
+        try {
+            $data = [self::getFieldNames()];
+            $response = (array)self::getPartnerStatisticInformation();
+            self::checkError($response);
+            self::collectData($data, $response);
+            $response = (array)self::getPartnerWaitOrder();
+            self::checkError($response);
+            self::collectData($data, $response);
+
+            return $data;
+        } catch (OzonException $e) {
+            echo $e;
+        } catch (Exception $e) {
+            echo 'Exception : ' . $e;
+        }
+
+        return [];
+    }
+
+    /**
+     * Установить клиент сервера SOAP в режиме с WSDL
+     * @return SoapClient Клиент сервера SOAP в режиме с WSDL
+     */
+    private static function setSoapClient()
+    {
+        empty(self::$client)
+        && self::$client = new SoapClient(
+            self::getConfig('wsdl', true),
+            [
+                'trace' =&gt; true,
+                'exceptions' =&gt; false,
+                'cache_wsdl' =&gt; WSDL_CACHE_NONE,
+                'connection_timeout' =&gt; 120
+            ]
+        );
+
+        return self::$client;
+    }
+
+    /**
+     * Возвращает ответ API метода GetPartnerStatisticInformationInterval
+     * @return stdClass Ответ API метода GetPartnerStatisticInformationInterval
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[ string ] ItemID&lt;/dt&gt;&lt;dd&gt;ID товара в заказе&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Name&lt;/dt&gt;&lt;dd&gt;Название товара в заказе&lt;/dd&gt;
+     *  &lt;dt&gt;[ enum ] State&lt;/dt&gt;&lt;dd&gt;Статус - Wait (В обработке) | wait-canceled (Аннулировано)&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Summ&lt;/dt&gt;&lt;dd&gt;Комиссия&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] AgentId&lt;/dt&gt;&lt;dd&gt;Суб-аккаунт&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] StateChangeMoment&lt;/dt&gt;&lt;dd&gt;Время изменения  статуса заказа, в формате dd.mm.yyyy hh:mm:ss&lt;/dd&gt;
+     *  &lt;dt&gt;[ int ] LinkDirect&lt;/dt&gt;&lt;dd&gt;Прямая ссылка ? 0 - нет, 1 - да&lt;/dd&gt;
+     *  &lt;dt&gt;[ int ] IsElectronics&lt;/dt&gt;&lt;dd&gt;Товар категории «Электроника»&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] PostingId&lt;/dt&gt;&lt;dd&gt;ID части заказа&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Price&lt;/dt&gt;&lt;dd&gt;Цена за 1 экземпляр товара&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Qty&lt;/dt&gt;&lt;dd&gt;Количество экземпляров товара&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Date&lt;/dt&gt;&lt;dd&gt;Дата и время оформления заказа, в формате dd.mm.yyyy hh:mm:ss&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] StatIdent&lt;/dt&gt;&lt;dd&gt;Идентификатор позиции заказа&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getPartnerStatisticInformation()
+    {
+        return self::$client-&gt;GetPartnerStatisticInformation(
+            [
+                'partnerName' =&gt; self::getConfig('partnerName', true),
+                'login' =&gt; self::getConfig('login', true),
+                'password' =&gt; self::getConfig('password', true),
+                'dateFrom' =&gt; self::$startDate
+            ]
+        )-&gt;{'GetPartnerStatisticInformationResult'};
+    }
+
+    /**
+     * Возвращает ответ API метода GetPartnerWaitOrderInterval
+     * @return stdClass Ответ API метода GetPartnerWaitOrderInterval
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[ string ] ItemID&lt;/dt&gt;&lt;dd&gt;ID товара в заказе&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Name&lt;/dt&gt;&lt;dd&gt;Название товара в заказе&lt;/dd&gt;
+     *  &lt;dt&gt;[ enum ] State&lt;/dt&gt;&lt;dd&gt;Статус - Wait (В обработке) | wait-canceled (Аннулировано)&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Summ&lt;/dt&gt;&lt;dd&gt;Комиссия&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] AgentId&lt;/dt&gt;&lt;dd&gt;Суб-аккаунт&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] StateChangeMoment&lt;/dt&gt;&lt;dd&gt;Время изменения  статуса заказа, в формате dd.mm.yyyy hh:mm:ss&lt;/dd&gt;
+     *  &lt;dt&gt;[ int ] LinkDirect&lt;/dt&gt;&lt;dd&gt;Прямая ссылка ? 0 - нет, 1 - да&lt;/dd&gt;
+     *  &lt;dt&gt;[ int ] IsElectronics&lt;/dt&gt;&lt;dd&gt;Товар категории «Электроника»&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] PostingId&lt;/dt&gt;&lt;dd&gt;ID части заказа&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Price&lt;/dt&gt;&lt;dd&gt;Цена за 1 экземпляр товара&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Qty&lt;/dt&gt;&lt;dd&gt;Количество экземпляров товара&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] Date&lt;/dt&gt;&lt;dd&gt;Дата и время оформления заказа, в формате dd.mm.yyyy hh:mm:ss&lt;/dd&gt;
+     *  &lt;dt&gt;[ string ] StatIdent&lt;/dt&gt;&lt;dd&gt;Идентификатор позиции заказа&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getPartnerWaitOrder()
+    {
+        return self::$client-&gt;GetPartnerWaitOrder(
+            [
+                'partnerName' =&gt; self::getConfig('partnerName', true),
+                'login' =&gt; self::getConfig('login', true),
+                'password' =&gt; self::getConfig('password', true),
+                'dateFrom' =&gt; self::$startDate
+            ]
+        )-&gt;{'GetPartnerWaitOrderResult'};
+    }
+
+    /**
+     * Возвращает название полей
+     * @return array Название полей
+     */
+    private static function getFieldNames()
+    {
+        return [
+            self::getIndex(self::COLUMN_ADV_SUB) =&gt; self::COLUMN_ADV_SUB,
+            self::getIndex(self::COLUMN_STATUS) =&gt; self::COLUMN_STATUS,
+            self::getIndex(self::COLUMN_ADVERTISER_STATUS) =&gt; self::COLUMN_ADVERTISER_STATUS,
+            self::getIndex(self::COLUMN_TRANSACTION_ID) =&gt; self::COLUMN_TRANSACTION_ID,
+            self::getIndex(self::COLUMN_AMOUNT) =&gt; self::COLUMN_AMOUNT,
+            self::getIndex(self::COLUMN_CREATED) =&gt; self::COLUMN_CREATED,
+            self::getIndex(self::COLUMN_CREATED_FRIENDLY) =&gt; self::COLUMN_CREATED_FRIENDLY
+        ];
+    }
+
+    /**
+     * Проверка доступности статуса
+     * @param string $status Статус
+     * @return bool Статус доступен ? true - да
+     */
+    private static function isAvailableStatus($status)
+    {
+        return isset(self::$mapping['status'][$status]);
+    }
+
+    /**
+     * Собрать данные из ответа
+     * @param array $data Текущий список данных
+     * @param array $response Ответ API
+     * @return void
+     */
+    private static function collectData(array &$data, array $response)
+    {
+        if (!isset($response['Stats']-&gt;OrderItem)) {
+            return null;
+        }
+        foreach ($response['Stats']-&gt;OrderItem as $item) {
+            if (!self::isAvailableStatus((string)$item-&gt;State)) {
+                Yii::log('Unknown status: ' . (string)$item-&gt;State, CLogger::LEVEL_INFO, 'ozon');
+                continue;
+            }
+            $timestamp = strtotime((string)$item-&gt;Date); // from format "d.m.Y h:i:s"
+            array_push(
+                $data,
+                [
+                    self::getIndex(self::COLUMN_ADV_SUB) =&gt; (string)$item-&gt;StatIdent,
+                    self::getIndex(self::COLUMN_STATUS) =&gt; self::getMapping('status', (string)$item-&gt;State),
+                    self::getIndex(self::COLUMN_ADVERTISER_STATUS) =&gt; (string)$item-&gt;State,
+                    self::getIndex(self::COLUMN_TRANSACTION_ID) =&gt; (string)$item-&gt;AgentId,
+                    self::getIndex(self::COLUMN_AMOUNT) =&gt; (string)$item-&gt;Summ,
+                    self::getIndex(self::COLUMN_CREATED) =&gt; $timestamp,
+                    self::getIndex(self::COLUMN_CREATED_FRIENDLY) =&gt; date(self::DATE_FORMAT_FRIENDLY, $timestamp)
+                ]
+            );
+        }
+    }
+
+    /**
+     * Проверка на ошибку в ответе API
+     * @param array $response Ответ API
+     * @throws OzonException Выброс исключения с ошибкой
+     */
+    private static function checkError(array $response)
+    {
+        if (isset($response['Error'])) {
+            throw new OzonException($response['ErrorDescription'], $response['Error']);
+        }
+    }
+
+    /**
+     * Получить индекс (ключ) в массиве колонок по названию колонки
+     * @param string $column Название колонки
+     * @return int Индекс (ключ) в массиве колонок
+     * @throws Exception Индекс не найден
+     */
+    private static function getIndex($column)
+    {
+        if (!isset(self::$columnIndexes[$column])) {
+            throw new Exception('Unknown column: ' . $column);
+        }
+
+        return self::$columnIndexes[$column];
+    }
+
+}
+
+class OzonStatus
+{
+    const DONE = 'done';
+    const CANCELED = 'canceled';
+    const WAIT = 'wait';
+    const WAIT_CANCELED = 'wait-canceled';
+}
+
+class OzonException extends Exception
+{
+    public function __construct($message, $code = 0)
+    {
+        parent::__construct($message, $code);
+    }
+
+    public function __toString()
+    {
+        return __CLASS__ . ' [ ' . $this-&gt;code . ' ] ' . $this-&gt;message . PHP_EOL;
+    }
+}

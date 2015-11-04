@@ -1,0 +1,147 @@
+&lt;?php
+
+class DiagramForm extends CFormModel
+{
+    public $name;
+    public $alias;
+    public $columns;
+    public $parent;
+
+    private static $column_types = array('one', 'two', 'three', 'four');
+
+    public function rules()
+    {
+        return array(
+            array('name', 'required'),
+            array('alias', 'required', 'on' =&gt; 'create'),
+            array('alias, name', 'length', 'max' =&gt; 127),
+            array('alias', 'validateAlias', 'on' =&gt; 'create'),
+            array('parent', 'validateParent'),
+            array('columns', 'in', 'range' =&gt; self::$column_types),
+        );
+    }
+
+    /**
+     * @return array customized attribute labels (name=&gt;label)
+     */
+    public function attributeLabels()
+    {
+        return array(
+            'parent' =&gt; 'Parent',
+            'name' =&gt; 'Name',
+            'alias' =&gt; 'Alias',
+            'columns' =&gt; 'Columns',
+        );
+    }
+
+    public function beforeValidate()
+    {
+        empty(self::$column_types[$this-&gt;columns]) || $this-&gt;columns = self::$column_types[$this-&gt;columns];
+
+        return parent::beforeValidate();
+    }
+
+    /**
+     * @param string $attribute
+     * @param array  $params
+     */
+    public function validateParent($attribute, array $params)
+    {
+        if ($this-&gt;$attribute && (!is_numeric($this-&gt;$attribute) || !self::existsDiagramID($this-&gt;$attribute)))
+        {
+            $this-&gt;addError($attribute, 'wrong parent id');
+        }
+    }
+
+    /**
+     * @param string $attribute
+     * @param array  $params
+     */
+    public function validateAlias($attribute, array $params)
+    {
+        if (!$this-&gt;$attribute)
+        {
+            $this-&gt;addError($attribute, 'empty alias');
+        }
+        if (self::existsAlias($this-&gt;$attribute))
+        {
+            $this-&gt;addError($attribute, 'alias exists');
+        }
+    }
+
+    public function getColumnNumber()
+    {
+        return self::getNumberOfColumns($this-&gt;columns);
+    }
+
+    public static function getNumberOfColumns($type)
+    {
+        $number = array_search($type, self::$column_types);
+
+        return !is_bool($number) ? ++$number : 0;
+    }
+
+    public function getColumns()
+    {
+        return self::$column_types;
+    }
+
+    public function getParentDiagrams()
+    {
+        return self::collectList(self::getDiagrams());
+    }
+
+    private static function collectList(array $data, $key = 'id', $value = 'name')
+    {
+        $list = array();
+        foreach ($data as $item)
+        {
+            $list[$item[$key]] = $item[$value];
+        }
+
+        return $list;
+    }
+
+    /**
+     * @return array
+     */
+    private function getDiagrams()
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT id, name FROM block_diagrams'
+        )-&gt;queryAll(true);
+    }
+
+    /**
+     * @param $id
+     *
+     * @return bool
+     */
+    private static function existsDiagramID($id)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'SELECT 1 FROM block_diagrams WHERE id = :id'
+        )-&gt;queryScalar(array(':id' =&gt; $id));
+    }
+
+    /**
+     * @param $alias
+     *
+     * @return bool
+     */
+    private static function existsAlias($alias)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'SELECT 1 FROM block_diagrams WHERE alias = :alias'
+        )-&gt;queryScalar(array(':alias' =&gt; $alias));
+    }
+
+    /**
+     * @return CDbConnection
+     */
+    private static function db()
+    {
+        return Yii::app()-&gt;getDb();
+    }
+
+}

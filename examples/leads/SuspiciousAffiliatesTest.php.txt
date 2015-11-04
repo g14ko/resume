@@ -1,0 +1,597 @@
+&lt;?php
+
+/**
+ * User: Гичко Евгений
+ * Date: 09.07.14
+ * Time: 10:11
+ */
+
+use \Yii;
+use \common\enums\StatusEnum;
+use \common\components\test\DbTestCase;
+use \common\models\ar\Affiliates;
+use shared\helpers\PasswordHelper;
+use \common\modules\monitor\components\SuspiciousAffiliatesWorker as Worker;
+
+class SuspiciousAffiliatesTest extends DbTestCase
+{
+
+    protected $fixtures = [
+        'affiliates' =&gt; ':affiliates',
+        'affiliate_users' =&gt; ':affiliate_users',
+        'affiliate_platforms' =&gt; ':affiliate_platforms',
+        'affiliate_payment_data' =&gt; ':affiliate_payment_data'
+    ];
+
+    public static function setUpBeforeClass()
+    {
+        parent::setUpBeforeClass();
+        Worker::setWhiteListIPs();
+    }
+
+    /**
+     * @test Тест нахождения подозрительных вебмастеров по почте
+     */
+    public function searchAffiliatesWithSuspiciousEMail()
+    {
+        parent::setUpBeforeTest();
+
+        $email = self::getAttributeLockedAffiliate('au.email');
+        !$email && $email = self::blockActiveAffiliateAndGetAttribute('au.email', 'email');
+
+        $this-&gt;addTestAffiliateUser([], ['email' =&gt; $email]);
+
+        $this-&gt;assertEquals(
+            self::countAffiliatesWithSuspiciousEmail(),
+            Worker::executeByParam(Worker::EMAIL)
+        );
+
+    }
+
+    /**
+     * @test Тест нахождения подозрительных вебмастеров по номеру телефона
+     */
+    public function searchAffiliatesWithSuspiciousPhone()
+    {
+        parent::setUpBeforeTest();
+
+        $phone = self::getAttributeLockedAffiliate('a.phone');
+        !$phone && $phone = self::blockActiveAffiliateAndGetAttribute('a.phone', 'phone');
+        self::addTestAffiliateUser(['phone' =&gt; $phone]);
+
+        $this-&gt;assertEquals(
+            self::countAffiliatesWithSuspiciousPhone(),
+            Worker::executeByParam(Worker::PHONE)
+        );
+
+    }
+
+    /**
+     * @test Тест нахождения подозрительных вебмастеров по IP регистрации
+     */
+    public function searchAffiliatesWithSuspiciousSignupIp()
+    {
+        parent::setUpBeforeTest();
+
+        $signupIP = self::getAttributeLockedAffiliate('a.signup_ip');
+        !$signupIP && $signupIP = self::blockActiveAffiliateAndGetAttribute('a.signup_ip', 'signup_ip');
+        self::addTestAffiliateUser(['signup_ip' =&gt; $signupIP]);
+
+        $this-&gt;assertEquals(
+            self::countAffiliatesWithSuspiciousSignupIp(),
+            Worker::executeByParam(Worker::SIGNUP_IP)
+        );
+
+    }
+
+    /**
+     * @test Тест нахождения подозрительных вебмастеров по URL адресу платформы
+     */
+    public function searchAffiliatesWithSuspiciousPlatformUrl()
+    {
+        parent::setUpBeforeTest();
+
+        $platformUrl = self::getAttributeLockedAffiliate('ap.source_url');
+        !$platformUrl && $platformUrl = self::blockActiveAffiliateAndGetAttribute('ap.source_url', 'url');
+        self::addTestAffiliateUser([], [], ['source_url' =&gt; $platformUrl]);
+
+        $this-&gt;assertEquals(
+            self::countAffiliatesWithSuspiciousPlatformUrl(),
+            Worker::executeByParam(Worker::PLATFORM_URL)
+        );
+
+    }
+
+    /**
+     * @test Тест нахождения подозрительных вебмастеров по электронному кошельку (yandex|webmoney)
+     */
+    public function searchAffiliatesWithSuspiciousEWallet()
+    {
+        parent::setUpBeforeTest();
+
+        $column = 'apd.data';
+        $condition = sprintf(
+            'apd.payment_type_id IN (%s,%s) AND apd.data!=""',
+            Worker::YANDEX_MONEY_TYPE_ID,
+            Worker::WEBMONEY_TYPE_ID
+        );
+        $eWallet = self::getAttributeLockedAffiliate($column, $condition);
+        !$eWallet && $eWallet = self::blockActiveAffiliateAndGetAttribute($column, 'payment', $condition);
+        self::addTestAffiliateUser([], [], [], ['payment_type_id' =&gt; is_numeric($eWallet) ? 1 : 2, 'data' =&gt; $eWallet]);
+
+        $this-&gt;assertEquals(
+            self::countAffiliatesWithSuspiciousEWallet(),
+            Worker::executeByParam(Worker::E_WALLET)
+        );
+
+    }
+
+    /**
+     * @test Тест нахождения подозрительных вебмастеров по банковским реквизитам
+     */
+    public function searchAffiliatesWithSuspiciousBankDetails()
+    {
+        parent::setUpBeforeTest();
+
+        $column = 'apd.data';
+        $condition = sprintf('apd.payment_type_id = %s AND INSTR(apd.data, "\"bank_rs\";s:0") = 0', Worker::BANK_TYPE_ID);
+        $details = self::getAttributeLockedAffiliate($column, $condition);
+        !$details && $details = self::blockActiveAffiliateAndGetAttribute($column, 'payment', $condition);
+        self::addTestAffiliateUser([], [], [], ['payment_type_id' =&gt; 3, 'data' =&gt; $details]);
+
+        $this-&gt;assertEquals(
+            self::countAffiliatesWithSuspiciousBankDetails(),
+            Worker::executeByParam(Worker::BANK_DETAILS)
+        );
+
+    }
+
+    /**
+     * Data provider for tryExecuteByParamSpecifyIncorrectParam
+     * @return array Неверные коды режима работы воркера
+     */
+    public function dpWrongParams()
+    {
+        return [
+            ['wrong_param'],
+            [4]
+        ];
+    }
+
+    /**
+     * @_test        Попытка нахождения подозрительных вебмастеров указав неправильный параметр
+     * @dataProvider dpWrongParams
+     */
+    public function tryExecuteByParamSpecifyIncorrectParam($param)
+    {
+        $this-&gt;assertEquals(
+            Worker::getErrorMessage($param),
+            Worker::executeByParam($param)
+        );
+    }
+
+    /**
+     * Добавить тестового вебмастера с нужными атрибутами
+     * @param array $overAffiliate Переопределенные атрибуты вебмастера
+     * @param array $overUser Переопределенные атрибуты пользователя
+     * @param array $overPlatform Переопределенные атрибуты платформы
+     * @param array $overPayment Переопределенные атрибуты платежных данных
+     * @return array ID добавленного тестового вебмастера
+     */
+    private function addTestAffiliateUser(array $overAffiliate = [], array $overUser = [], array $overPlatform = [], array $overPayment = [])
+    {
+        $affiliate = array_shift(self::getFixtures('affiliates'));
+        self::overrideAttributes($affiliate, $overAffiliate);
+        $affiliateID = self::addRecord('affiliates', $affiliate, true);
+
+        $user = array_shift(self::getFixtures('affiliate_users'));
+        self::overrideAttributes($user, $overUser, $affiliateID);
+        self::correctUserAttributes($user);
+        self::addRecord('affiliate_users', $user);
+
+        if (!empty($overPlatform)) {
+            $platform = array_shift(self::getFixtures('affiliate_platforms'));
+            self::overrideAttributes($platform, $overPlatform, $affiliateID);
+            self::addRecord('affiliate_platforms', $platform);
+        }
+
+        if (!empty($overPayment)) {
+            $payment = array_shift(self::getFixtures('affiliate_payment_data'));
+            self::overrideAttributes($payment, $overPayment, $affiliateID);
+            self::addRecord('affiliate_payment_data', $payment);
+        }
+
+        return $affiliateID;
+    }
+
+    /**
+     * Добавить запись в таблицу
+     * @param string $table Название таблицы
+     * @param array  $attributes Атрибуты
+     * @param bool   $lastID Вернуть последний добавленный ID ? true - да, по умолчанию - false
+     * @return int Последний добавленный ID записи | 0
+     */
+    private static function addRecord($table, array $attributes, $lastID = false)
+    {
+        self::db()-&gt;createCommand()-&gt;insert($table, $attributes);
+
+        return !$lastID ? 0 : (int)self::db()-&gt;getLastInsertID();
+    }
+
+    /**
+     * Переопределить атрибуты
+     * @param array $attributes Ссылка на атрибуты
+     * @param array $overridden Переопределенные атрибуты
+     * @param int   $affiliateID ID вебмастера, по умолчанию - 0
+     */
+    private static function overrideAttributes(array &$attributes, array $overridden, $affiliateID = 0)
+    {
+        self::cutId($attributes);
+        $attributes = array_merge($attributes, $overridden);
+        $affiliateID && $attributes = array_merge($attributes, ['affiliate_id' =&gt; $affiliateID]);
+    }
+
+    /**
+     * Подкорректировать пользовательские атрибуты вебмастера
+     * @param array $attributes Ссылка на пользовательские атрибуты вебмастера
+     */
+    private static function correctUserAttributes(array &$attributes)
+    {
+        $attributes['api_key'] = md5(microtime() . mt_rand());
+        $attributes['secret_key'] = md5(PasswordHelper::generate(10) . $attributes['email']);
+    }
+
+    /**
+     * Вырезать ID из аттрибутов
+     * @param array $attributes Ссылка на атрибуты
+     */
+    private static function cutId(array &$attributes)
+    {
+        if (array_key_exists('id', $attributes)) {
+            unset($attributes['id']);
+        }
+    }
+
+    /**
+     * Получить атрибут заблокированного вебмастера
+     * @param string $name Название атрибута
+     * @param string $condition Добавочное условие, по умолчанию - &lt;code&gt;''&lt;/code&gt;
+     * @return string Атрибут заблокированного вебмастера
+     */
+    private static function getAttributeLockedAffiliate($name, $condition = '')
+    {
+        !$condition || $condition = 'AND ' . $condition;
+
+        return (string)self::db()-&gt;createCommand(
+            sprintf(
+                'SELECT %s
+				FROM affiliates a
+				JOIN affiliate_users au ON au.affiliate_id = a.id AND au.is_creator = 1
+				JOIN affiliate_platforms ap ON ap.affiliate_id = a.id
+				JOIN affiliate_payment_data apd ON apd.affiliate_id = a.id
+				WHERE a.status = :blocked %s
+				LIMIT 1',
+                $name,
+                $condition
+            )
+        )-&gt;queryScalar([':blocked' =&gt; StatusEnum::STATUS_BLOCKED]);
+    }
+
+    /**
+     * Полцить модель вебмастера
+     * @param int $id ID вебмастера
+     * @return Affiliates Модель вебмастера
+     */
+    private static function getAffiliateModelByID($id)
+    {
+        return Affiliates::model()-&gt;findByPk($id);
+    }
+
+    /**
+     * Возвращает атрибуты пользователя (вебмастера)
+     * @param int    $affiliateID ID вебмастера
+     * @param string $condition Добавочное условие, по умолчанию - &lt;code&gt;''&lt;/code&gt;
+     * @return array Атрибуты пользователя-вебмастера
+     * &lt;dl&gt;
+     *  &lt;dt&gt;[string] name&lt;/dt&gt;&lt;dd&gt;Название компании&lt;/dd&gt;
+     *  &lt;dt&gt;[string] phone&lt;/dt&gt;&lt;dd&gt;Номер телефона&lt;/dd&gt;
+     *  &lt;dt&gt;[string] signup_ip&lt;/dt&gt;&lt;dd&gt;IP регистрации&lt;/dd&gt;
+     *  &lt;dt&gt;[string] email&lt;/dt&gt;&lt;dd&gt;Адрес почты&lt;/dd&gt;
+     *  &lt;dt&gt;[string] url&lt;/dt&gt;&lt;dd&gt;URL адрес площадки&lt;/dd&gt;
+     *  &lt;dt&gt;[string] payment&lt;/dt&gt;&lt;dd&gt;Платежные реквизиты&lt;/dd&gt;
+     * &lt;/dl&gt;
+     */
+    private static function getUserAttributes($affiliateID, $condition = '')
+    {
+        !$condition || $condition = 'AND ' . $condition;
+
+        return (array)self::db()-&gt;createCommand(
+            sprintf(
+                'SELECT
+					a.company name,
+					a.cell_phone phone,
+					a.signup_ip,
+					u.email,
+					ap.source_url url,
+					apd.data payment
+				FROM affiliates a
+				JOIN affiliate_users u ON u.affiliate_id = a.id AND u.is_creator = 1
+				JOIN affiliate_platforms ap ON ap.affiliate_id = a.id
+				JOIN affiliate_payment_data apd ON apd.affiliate_id = a.id
+				WHERE u.affiliate_id=:aid %s',
+                $condition
+            )
+        )-&gt;queryRow(true, [':aid' =&gt; $affiliateID]);
+    }
+
+    /**
+     * Найти активного вебмастера с заданным не пустым атрибутом
+     * @param  string $name Название атрибута
+     * @param string  $condition Добавочное условие, по умолчанию - &lt;code&gt;''&lt;/code&gt;
+     * @return int ID вебмастера
+     */
+    private static function findActiveAffiliateWithNoEmptyAttribute($name, $condition = '')
+    {
+        !$condition || $condition = 'AND ' . $condition;
+
+        return (int)self::db()-&gt;createCommand(
+            sprintf(
+                'SELECT a.id
+				FROM affiliates a
+				JOIN affiliate_users au ON au.affiliate_id = a.id AND au.is_creator = 1
+				JOIN affiliate_platforms ap ON ap.affiliate_id = a.id
+				JOIN affiliate_payment_data apd ON apd.affiliate_id = a.id
+				WHERE a.status = :active AND %s != "" %s',
+                $name,
+                $condition
+            )
+        )-&gt;queryScalar([':active' =&gt; StatusEnum::STATUS_ACTIVE]);
+    }
+
+    /**
+     * Заблоктровать асктивного вебмастера и вернуть значение искомого атрибута
+     * @param  string $name Название атрибута
+     * @param string  $alias Алиас атрибута, по умолчанию - $name
+     * @param string  $condition Добавочное условие, по умолчанию - &lt;code&gt;''&lt;/code&gt;
+     * @return string Значение искомого атрибута
+     */
+    private static function blockActiveAffiliateAndGetAttribute($name, $alias = '', $condition = '')
+    {
+        $alias || $alias = $name;
+        $affiliateID = self::findActiveAffiliateWithNoEmptyAttribute($name, $condition);
+        $affiliate = self::getAffiliateModelByID($affiliateID);
+        $user = self::getUserAttributes($affiliateID, $condition);
+        $affiliate-&gt;block();
+
+        return isset($user[$alias]) ? $user[$alias] : '';
+    }
+
+    /**
+     * Возвращает количество вебмастеров с почтой из черного списка
+     * @return int Количество вебмастеров с почтой из черного списка
+     */
+    private static function countAffiliatesWithSuspiciousEmail()
+    {
+        return (int)Affiliates::model()-&gt;count(
+            [
+                'select' =&gt; 'a.id',
+                'alias' =&gt; 'a',
+                'join' =&gt; join(
+                    ' ',
+                    [
+                        'JOIN affiliate_users au ON au.affiliate_id=a.id AND au.email != "" AND au.is_creator = 1',
+                        'JOIN affiliate_blocked_users as abu ON abu.email=au.email AND abu.deleted = 0'
+                    ]
+                ),
+                'condition' =&gt; 'a.status = :active',
+                'params' =&gt; [
+                    ':active' =&gt; StatusEnum::STATUS_ACTIVE
+                ],
+                'group' =&gt; 'a.id'
+            ]
+        );
+    }
+
+    /**
+     * Возвращает количество вебмастеров с номером телефона из черного списка
+     * @return int Количество вебмастеров с номером телефона из черного списка
+     */
+    private static function countAffiliatesWithSuspiciousPhone()
+    {
+        return (int)Affiliates::model()-&gt;count(
+            [
+                'select' =&gt; 'a.id',
+                'alias' =&gt; 'a',
+                'join' =&gt; join(
+                    ' ',
+                    [
+                        'JOIN affiliate_users au ON au.affiliate_id=a.id AND a.status = :active AND au.is_creator = 1',
+                        'JOIN affiliate_blocked_users abu ON abu.phone = a.cell_phone AND abu.deleted = 0'
+                    ]
+                ),
+                'condition' =&gt; 'a.cell_phone != ""',
+                'params' =&gt; [
+                    ':active' =&gt; StatusEnum::STATUS_ACTIVE
+                ],
+                'group' =&gt; 'a.id'
+            ]
+        );
+    }
+
+    /**
+     * Возвращает количество вебмастеров с IP регистрации или входа из черного списка
+     * @return int Количество вебмастеров с IP регистрации или входа из черного списка
+     */
+    private static function countAffiliatesWithSuspiciousSignupIp()
+    {
+        $alreadyMarkedAffiliateIDs = [];
+        $whiteListIPs = Worker::getWhiteListIPs();
+        $excludeIPs = !empty($whiteListIPs) ?
+            sprintf(
+                ' AND a.signup_ip NOT IN (%s)',
+                join(
+                    ',',
+                    array_map(
+                        function ($ip) {
+                            return "'" . $ip . "'";
+                        },
+                        $whiteListIPs
+                    )
+                )
+            ) : '';
+        $markedAffiliates = Affiliates::model()-&gt;findAll(
+            [
+                'select' =&gt; ['a.id', 'a.signup_ip'],
+                'alias' =&gt; 'a',
+                'join' =&gt; 'JOIN affiliate_blocked_ips abi ON abi.ip = a.signup_ip AND abi.deleted = 0 AND a.signup_ip != ""',
+                'condition' =&gt; 'a.status = :active' . $excludeIPs,
+                'params' =&gt; [
+                    ':active' =&gt; StatusEnum::STATUS_ACTIVE
+                ],
+                'group' =&gt; 'a.id'
+            ]
+        );
+        foreach ($markedAffiliates as $affiliate) {
+            array_push($alreadyMarkedAffiliateIDs, $affiliate['id']);
+        }
+        $excludeIPs = !empty($whiteListIPs) ?
+            sprintf(
+                ' AND lh.ip NOT IN (%s)',
+                join(
+                    ',',
+                    array_map(
+                        function ($ip) {
+                            return "'" . $ip . "'";
+                        },
+                        $whiteListIPs
+                    )
+                )
+            ) : '';
+        $excludeIDs = !empty($alreadyMarkedAffiliateIDs) ?
+            sprintf(' AND a.id NOT IN (%s)', join(',', $alreadyMarkedAffiliateIDs)) : '';
+
+        return count($markedAffiliates) + count(
+            Affiliates::model()-&gt;findAll(
+                [
+                    'select' =&gt; 'a.id',
+                    'alias' =&gt; 'a',
+                    'join' =&gt; join(
+                        ' ',
+                        [
+                            'JOIN login_history as lh ON lh.account_id =a.id AND lh.manager_id IS NULL',
+                            'JOIN affiliate_blocked_ips abi ON abi.deleted = 0 AND abi.ip = lh.ip AND lh.ip != ""'
+                        ]
+                    ),
+                    'condition' =&gt; 'a.status = :active' . $excludeIPs . $excludeIDs,
+                    'params' =&gt; [
+                        ':active' =&gt; StatusEnum::STATUS_ACTIVE
+                    ],
+                    'group' =&gt; 'a.id'
+                ]
+            )
+        );
+    }
+
+    /**
+     * Возвращает количество вебмастеров с URL адресом платформы из черного списка
+     * @return int Количество вебмастеров с URL адресом платформы из черного списка
+     */
+    private static function countAffiliatesWithSuspiciousPlatformUrl()
+    {
+        return (int)Affiliates::model()-&gt;count(
+            [
+                'select' =&gt; 'a.id',
+                'alias' =&gt; 'a',
+                'join' =&gt; 'LEFT JOIN affiliate_platforms ap ON ap.affiliate_id = a.id AND ap.source_url != ""',
+                'condition' =&gt; 'a.status = :active AND ap.source_url IN (SELECT url FROM affiliate_blocked_platforms WHERE deleted = 0)',
+                'params' =&gt; [
+                    ':active' =&gt; StatusEnum::STATUS_ACTIVE
+                ],
+                'group' =&gt; 'a.id'
+            ]
+        );
+    }
+
+    /**
+     * Возвращает количество вебмастеров с электронным кошельком из черного списка
+     * @return int Количество вебмастеров с электронным кошельком из черного списка
+     */
+    private static function countAffiliatesWithSuspiciousEWallet()
+    {
+        return (int)Affiliates::model()-&gt;count(
+            [
+                'select' =&gt; 'a.id',
+                'alias' =&gt; 'a',
+                'join' =&gt; join(
+                    ' ',
+                    [
+                        'LEFT JOIN affiliate_payment_data apd ON apd.affiliate_id = a.id AND apd.payment_type_id IN (:yandex, :webmoney)',
+                        'JOIN affiliate_blocked_e_wallets abw ON abw.type_id = apd.payment_type_id AND abw.deleted = 0'
+                    ]
+                ),
+                'condition' =&gt; 'a.status = :active AND apd.data = abw.wallet AND apd.data != ""',
+                'params' =&gt; [
+                    ':active' =&gt; StatusEnum::STATUS_ACTIVE,
+                    ':yandex' =&gt; Worker::YANDEX_MONEY_TYPE_ID,
+                    ':webmoney' =&gt; Worker::WEBMONEY_TYPE_ID
+                ],
+                'group' =&gt; 'a.id'
+            ]
+        );
+    }
+
+    /**
+     * Возвращает количество вебмастеров с банковскими реквизитами из черного списка
+     * @return int Количество вебмастеров с банковскими реквизитами из черного списка
+     */
+    private static function countAffiliatesWithSuspiciousBankDetails()
+    {
+        return (int)Affiliates::model()-&gt;count(
+            [
+                'select' =&gt; 'a.id',
+                'alias' =&gt; 'a',
+                'join' =&gt; join(
+                    ' ',
+                    [
+                        'LEFT JOIN affiliate_payment_data apd ON apd.affiliate_id = a.id AND apd.payment_type_id = :bank',
+                        'JOIN affiliate_blocked_bank_transfers abt ON INSTR(apd.data, abt.settlement_account) &gt; 1 AND abt.deleted = 0'
+                    ]
+                ),
+                'condition' =&gt; 'a.status = :active AND apd.data != ""',
+                'params' =&gt; [
+                    ':active' =&gt; StatusEnum::STATUS_ACTIVE,
+                    ':bank' =&gt; Worker::BANK_TYPE_ID
+                ],
+                'group' =&gt; 'a.id'
+            ]
+        );
+    }
+
+    /**
+     * Возвращает количество вебмастеров с любыми параметрами из черного списка
+     * @return int Количество вебмастеров с любыми параметрами из черного списка
+     */
+    private static function countAffiliatesWithAnySuspiciousParams()
+    {
+        $count = 0;
+        $count += self::countAffiliatesWithSuspiciousEmail();
+        $count += self::countAffiliatesWithSuspiciousPhone();
+        $count += self::countAffiliatesWithSuspiciousSignupIp();
+        $count += self::countAffiliatesWithSuspiciousPlatformUrl();
+        $count += self::countAffiliatesWithSuspiciousEWallet();
+        $count += self::countAffiliatesWithSuspiciousBankDetails();
+
+        return $count;
+    }
+
+    /**
+     * Получить фикстуры (данные)
+     * @param string $name Название фикстуры
+     * @return array Список фикстур (данных)
+     */
+    private function getFixtures($name)
+    {
+        return $this-&gt;getFixtureManager()-&gt;getRows($name);
+    }
+
+}

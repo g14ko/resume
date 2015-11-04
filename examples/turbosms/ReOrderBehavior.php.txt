@@ -1,0 +1,85 @@
+&lt;?php
+/**
+ * @author j3nya
+ * @date 10/14/13
+ * @time 4:49 PM
+ */
+
+namespace application\components\behaviors\models;
+
+
+class ReOrderBehavior extends \CBehavior
+{
+
+    public $fieldOrder;
+
+    public function events()
+    {
+        return ['onBeforeSave' =&gt; 'beforeSave'];
+    }
+
+
+    /**
+     * Обработчик события onBeforeSave
+     *
+     * @param \CEvent $aEvent Обьект события
+     */
+    public function beforeSave(\CEvent $aEvent)
+    {
+        $this-&gt;reorder();
+    }
+
+    /**
+     * Сдвинуть порядок следования
+     */
+    public function reorder()
+    {
+        $owner = $this-&gt;getOwner();
+        if ($owner-&gt;getIsNewRecord())
+        {
+            $newOrder = $owner-&gt;getAttribute($this-&gt;fieldOrder);
+
+            self::shiftOrder($owner-&gt;tableName(), $this-&gt;fieldOrder, $newOrder);
+        }
+        elseif ($owner-&gt;hasChanged($this-&gt;fieldOrder))
+        {
+            $oldOrder = $owner-&gt;getOriginalAttribute($this-&gt;fieldOrder);
+            $newOrder = $owner-&gt;getAttribute($this-&gt;fieldOrder);
+            switch (true)
+            {
+                case $oldOrder &lt; $newOrder:
+                    self::shiftOrder($owner-&gt;tableName(), $this-&gt;fieldOrder, ++$oldOrder, ++$newOrder, false);
+                    break;
+                case $oldOrder &gt; $newOrder:
+                    self::shiftOrder($owner-&gt;tableName(), $this-&gt;fieldOrder, $newOrder, $oldOrder);
+                    break;
+            }
+        }
+    }
+
+    /**
+     * Сдвинуть порядок следования для заданного интервала
+     *
+     * @param string  $table Название таблицы, где хранится порядок следования
+     * @param string  $field Название поля, где хранится порядок следования
+     * @param int  $from Начальный порядок интервала
+     * @param int  $to Конечный порядок интервала (не обязательный, по умолчаню - отсутствует)
+     * @param bool $direction Направление сдвига (по умолчанию - true - увеличить на единицу)
+     * @return void
+     */
+    private static function shiftOrder($table, $field, $from, $to = null, $direction = true)
+    {
+        $shift = (!$direction) ? '-' : '+';
+        $set = [$field =&gt; new \CDbExpression('`'.$field.'` ' . $shift . ' 1')];
+        $where = '`'.$field.'` &gt;= :from';
+        $params[':from'] = (int)$from;
+        if (!empty($to))
+        {
+            $where .= ' AND `'.$field.'` &lt; :to';
+            $params[':to'] = (int)$to;
+        }
+        $cmd = \Yii::app()-&gt;getDb()-&gt;createCommand();
+        $cmd-&gt;update($table, $set, $where, $params);
+    }
+
+}

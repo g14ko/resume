@@ -1,0 +1,647 @@
+&lt;?php
+
+class DiagramController extends Controller
+{
+    public function init()
+    {
+        parent::init();
+
+        $this-&gt;setLayout('column2');
+        $this-&gt;setDefaultAction('view');
+    }
+
+    /**
+     * Get config
+     *
+     * @param string $alias alias of path
+     *
+     * @return array config
+     */
+    private static function config($alias = '')
+    {
+        static $config = array();
+        if (!$config)
+        {
+            $filepath = Yii::app()-&gt;getBasePath(true) . '/config/crawl.php';
+            !empty($config) || !file_exists($filepath) || $config = require $filepath;
+        }
+
+        if (!empty($alias))
+        {
+            foreach (explode('.', $alias) as $key)
+            {
+                if (!isset($config[$key]))
+                {
+                    break;
+                }
+                $config = $config[$key];
+            }
+        }
+
+        return $config;
+    }
+
+    public function actionList($alias)
+    {
+        $this-&gt;render('list', array(
+            'menu' =&gt; self::getDiagramBreadcrumbs($alias),
+            'content' =&gt; $this-&gt;renderList($alias)
+        ));
+    }
+
+    private function renderBannedLinks()
+    {
+        $hosts = array();
+        $i = 1;
+        foreach (self::config('deny.hosts') as $domain =&gt; $links)
+        {
+            foreach ($links as $link)
+            {
+                $hosts[] = array(
+                    'id' =&gt; $i,
+                    'domain' =&gt; $domain,
+                    'link' =&gt; $link,
+                );
+                $i++;
+            }
+        }
+
+        return $this-&gt;renderPartial('banned-links', array(
+            'hosts' =&gt; new CArrayDataProvider($hosts, array(
+                'id' =&gt; 'banned-links-provider',
+                'keyField' =&gt; 'id'
+            )),
+        ), true);
+    }
+
+    private function renderApplicationLinks()
+    {
+        $schemas = array();
+        foreach (self::config('deny.schemas') as $i =&gt; $schema)
+        {
+            $schemas[] = array(
+                'id' =&gt; $i,
+                'schema' =&gt; $schema
+            );
+        }
+
+        return $this-&gt;renderPartial('schemas', array(
+            'schemas' =&gt; new CArrayDataProvider($schemas, array(
+                'id' =&gt; 'application-links-provider',
+                'keyField' =&gt; 'id'
+            )),
+        ), true);
+    }
+
+    private function renderForbiddenExtensions()
+    {
+        $extensions = array();
+        foreach (self::config('deny.extensions') as $i =&gt; $extension)
+        {
+            $extensions[] = array(
+                'id' =&gt; $i,
+                'extension' =&gt; $extension
+            );
+        }
+
+        return $this-&gt;renderPartial('extensions', array(
+            'extensions' =&gt; new CArrayDataProvider($extensions, array(
+                'id' =&gt; 'forbidden-extensions-provider',
+                'keyField' =&gt; 'id'
+            )),
+        ), true);
+    }
+
+    private function renderList($alias)
+    {
+        $method = 'render' . str_replace('-', '', $alias);
+        if (!method_exists($this, $method))
+        {
+            return 'not implemented';
+        }
+
+        return $this-&gt;$method();
+    }
+
+    public function actionAddRow($alias)
+    {
+        if (!$alias || !self::hasDiagram($alias))
+        {
+            throw new Exception('diagram not found');
+        }
+
+        $diagram = self::getDiagram($alias);
+        $columns = DiagramForm::getNumberOfColumns($diagram['columns']);
+        $row = self::getLastRowNumber($diagram['id']) + 1;
+
+        for ($column = 1; $column &lt;= $columns; $column++)
+        {
+            $type = 'empty';
+            $content = '';
+            $class = $column == 1 ? '' : ' right-column';
+
+            self::saveDiagramBlock(self::getBlockAttributes($diagram['id'], $row, $column, $type, $class, $content));
+        }
+
+        Yii::app()-&gt;end(CJSON::encode(array(
+            'success' =&gt; true
+        )));
+    }
+
+    public function actionDeleteRow($alias, $row)
+    {
+        if (!$alias || !self::hasDiagram($alias))
+        {
+            throw new Exception('diagram not found');
+        }
+        if (!$row || !is_numeric($row))
+        {
+            throw new Exception('wrong passed param "row"');
+        }
+
+        $diagram = self::getDiagram($alias);
+
+        self::deleteRow($diagram['id'], $row) && self::shiftRows($diagram['id'], $row);
+
+        Yii::app()-&gt;end(CJSON::encode(array('success' =&gt; true)));
+    }
+
+    private static function icon($class)
+    {
+        return CHtml::tag('i', array(
+            'style' =&gt; 'font-size:12px;margin-right:8px;opacity:.9;',
+            'class' =&gt; 'icon-' . $class,
+        ), '');
+    }
+
+    public function actionCreate()
+    {
+        $this-&gt;setPageTitle('Diagram');
+        $this-&gt;setBreadCrumbs(array('Create'));
+
+        $this-&gt;setMenu(array(
+            array('label' =&gt; self::icon('list-ul') . 'to list', 'url' =&gt; array('/dev/doc/')),
+        ));
+
+        $request = self::request();
+        $form = new DiagramForm('create');
+
+        if ($request-&gt;getIsPostRequest())
+        {
+            $form-&gt;setAttributes($request-&gt;getPost('DiagramForm'));
+            if (!$form-&gt;validate())
+            {
+                Yii::app()-&gt;end(CJSON::encode($this-&gt;renderPartial('form', array('diagram' =&gt; $form), true)));
+            }
+
+            if (self::saveDiagram($form-&gt;getAttributes(array('alias', 'name', 'columns'))))
+            {
+                $diagram_id = self::db()-&gt;getLastInsertID();
+                $parent_id = !$form-&gt;parent ? 0 : self::getParentBreadcrumbID($form-&gt;parent);
+
+                self::saveBreadcrumb($diagram_id, $parent_id);
+
+                $columns = $form-&gt;getColumnNumber();
+                $init = false;
+                for ($row = 1; $row &lt;= 2; $row++)
+                {
+                    for ($column = 1; $column &lt;= $columns; $column++)
+                    {
+                        $type = 'empty';
+                        $content = '';
+                        $class = $row == 1 ? 'first-row' : '';
+                        $class .= $column == 1 ? '' : ' right-column';
+                        if (!$init)
+                        {
+                            $init = true;
+                            $type = 'initial';
+                            $content = 'begin';
+                        }
+
+                        self::saveDiagramBlock(self::getBlockAttributes($diagram_id, $row, $column, $type, $class, $content));
+                    }
+                }
+
+                Yii::app()-&gt;end(CJSON::encode(array(
+                    'success' =&gt; true,
+                    'redirect' =&gt; self::createAbsUrl('/dev/doc/diagram', array('alias' =&gt; $form-&gt;alias))
+                )));
+            }
+        }
+
+        $this-&gt;render('create', array('diagram' =&gt; $form));
+    }
+
+    private static function getBlockAttributes($block_diagram_id, $row, $column, $type, $class, $content)
+    {
+        return array(
+            ':block_diagram_id' =&gt; $block_diagram_id,
+            ':row' =&gt; $row,
+            ':column' =&gt; $column,
+            ':type' =&gt; $type,
+            ':class' =&gt; $class,
+            ':url' =&gt; '',
+            ':content' =&gt; $content,
+            ':arrows' =&gt; '',
+            ':text_u' =&gt; '',
+            ':text_r' =&gt; '',
+            ':text_d' =&gt; '',
+            ':text_l' =&gt; ''
+        );
+    }
+
+    public function actionEdit($alias = '')
+    {
+        if (!$alias || !self::hasDiagram($alias))
+        {
+            throw new Exception('diagram not found');
+        }
+
+        $this-&gt;setPageTitle('Diagram');
+        $this-&gt;setBreadCrumbs(array('Edit'));
+
+        $this-&gt;setMenu(array(
+            array('label' =&gt; self::icon('list-ul') . 'to list', 'url' =&gt; array('/dev/doc/')),
+        ));
+
+        $request = self::request();
+        $diagram = self::getDiagram($alias);
+        $form = new DiagramForm('update');
+
+        if ($request-&gt;getIsPostRequest())
+        {
+            $form-&gt;setAttributes($request-&gt;getPost('DiagramForm'));
+            if (!$form-&gt;validate())
+            {
+                Yii::app()-&gt;end(CJSON::encode($this-&gt;renderPartial('form', array('diagram' =&gt; $form), true)));
+            }
+
+            self::updateDiagram($diagram['id'], $form-&gt;getAttributes(array('name', 'columns')));
+            $parent_id = !$form-&gt;parent ? 0 : self::getParentBreadcrumbID($form-&gt;parent);
+            self::saveBreadcrumb($diagram['id'], $parent_id);
+
+            Yii::app()-&gt;end(CJSON::encode(array(
+                'success' =&gt; true,
+                'redirect' =&gt; self::createAbsUrl('/dev/doc/diagram', array('alias' =&gt; $alias))
+            )));
+        }
+
+        $form-&gt;setAttributes(array(
+            'parent' =&gt; self::getParentDiagramID($diagram['id']),
+            'alias' =&gt; $diagram['alias'],
+            'name' =&gt; $diagram['name'],
+            'columns' =&gt; $diagram['columns'],
+        ));
+
+        $this-&gt;render('edit', array('diagram' =&gt; $form));
+    }
+
+    public function actionEditBlock($alias, $row, $column)
+    {
+        if (!$alias || !($diagram = self::getDiagram($alias)))
+        {
+            throw new Exception('diagram not found');
+        }
+
+        if (!$row || !$column || !($block = self::getDiagramBlock($diagram['id'], $row, $column)))
+        {
+            throw new Exception('diagram block not found');
+        }
+
+        $request = self::request();
+        $form = new DiagramBlockForm('update');
+
+        if ($request-&gt;getIsPostRequest() && $attributes = $request-&gt;getPost('DiagramBlockForm'))
+        {
+            $form-&gt;setAttributes($attributes);
+            if ($form-&gt;validate())
+            {
+                $arrows = $form-&gt;getArrows($attributes);
+                $values = array(
+                    ':type' =&gt; $form-&gt;getType($attributes['type']),
+                    ':class' =&gt; $attributes['class'],
+                    ':url' =&gt; $attributes['url'],
+                    ':content' =&gt; $attributes['content'],
+                    ':arrows' =&gt; $arrows['arrows'],
+                    ':text_u' =&gt; $arrows['text_u'],
+                    ':text_r' =&gt; $arrows['text_r'],
+                    ':text_d' =&gt; $arrows['text_d'],
+                    ':text_l' =&gt; $arrows['text_l']
+                );
+
+                Yii::app()-&gt;end(CJSON::encode(array(
+                    'success' =&gt; self::updateDiagramBlock($block['id'], $values),
+                    'values' =&gt; $values,
+                    'redirect' =&gt; self::createAbsUrl('/dev/doc/diagram', array('alias' =&gt; $alias))
+                )));
+            }
+        }
+
+        $this-&gt;setPageTitle('Edit diagram block');
+        $this-&gt;setBreadCrumbs(array('[' . $diagram['name'] . '] [' . $block['row'] . '] [' . $block['row'] . ']'));
+
+
+        $this-&gt;setMenu(array(
+            array('label' =&gt; self::icon('chevron-left') . 'back to diagram', 'url' =&gt; array('/dev/doc/diagram?alias=' . $alias)),
+        ));
+
+        $form-&gt;setAttributes($block);
+        $form-&gt;setArrows($block);
+
+        $params = array('block' =&gt; $form);
+
+        $this-&gt;render('edit-block', $params);
+    }
+
+    private static function saveDiagramBlock(array $attributes)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'INSERT INTO  block_diagram_items (block_diagram_id, row, `column`, type, class, url, content, arrows, text_u, text_r, text_d, text_l)
+              VALUES (:block_diagram_id, :row, :column, :type, :class, :url, :content, :arrows, :text_u, :text_r, :text_d, :text_l)'
+        )-&gt;execute($attributes);
+    }
+
+    private static function updateDiagramBlock($id, array $attributes)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'UPDATE block_diagram_items
+              SET
+                type = :type,
+                class = :class,
+                url = :url,
+                content = :content,
+                arrows = :arrows,
+                text_u = :text_u,
+                text_r = :text_r,
+                text_d = :text_d,
+                text_l = :text_l
+              WHERE id = :id'
+        )-&gt;execute(array_merge(array(':id' =&gt; $id), $attributes));
+    }
+
+    private static function saveDiagram(array $attributes)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'INSERT INTO block_diagrams(name, columns, alias)
+                VALUES (:name, :columns, :alias)'
+        )-&gt;execute(array(
+            ':alias' =&gt; $attributes['alias'],
+            ':name' =&gt; $attributes['name'],
+            ':columns' =&gt; $attributes['columns']
+        ));
+    }
+
+    private static function updateDiagram($id, array $attributes)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'UPDATE block_diagrams
+                SET name = :name, columns = :columns
+                WHERE id = :id'
+        )-&gt;execute(array(
+            ':id' =&gt; $id,
+            ':name' =&gt; $attributes['name'],
+            ':columns' =&gt; $attributes['columns']
+        ));
+    }
+
+    private static function saveBreadcrumb($id, $parent_id)
+    {
+        return self::db()-&gt;createCommand(
+            'INSERT INTO block_diagram_breadcrumbs(block_diagram_id, parent_id) VALUES (:id, :parent)
+              ON DUPLICATE KEY UPDATE block_diagram_id = :id, parent_id = :parent'
+        )-&gt;execute(array(
+            ':id' =&gt; $id,
+            ':parent' =&gt; $parent_id
+        ));
+    }
+
+    public function actionDiagram($alias = 'crawl-sites')
+    {
+        if (!self::hasDiagram($alias))
+        {
+            throw new Exception('diagram not found');
+        }
+
+        $this-&gt;setBreadCrumbs(array('Block diagrams'));
+
+        $diagram = self::getDiagram($alias);
+
+        $blocks = self::getDiagramBlocks($diagram['id']);
+        $blocks = self::collectDiagram($blocks);
+
+        $params = array(
+            'menu' =&gt; self::getDiagramBreadcrumbs($alias),
+            'columns' =&gt; $diagram['columns'],
+            'blocks' =&gt; $blocks
+        );
+
+        $this-&gt;render('diagram', $params);
+    }
+
+    private static function getDiagramBreadcrumbs($alias)
+    {
+        $breadcrumbs = array();
+        $breadcrumb = self::getBreadCrumb($alias);
+        $parent_id = $breadcrumb['parent_id'];
+
+        while ($parent_id && $parent = self::getBreadCrumbById($parent_id))
+        {
+            $breadcrumbs[$parent['name']] = self::createAbsUrl('dev/doc/' . $parent['type'], array('alias' =&gt; $parent['alias']));
+            $parent_id = $parent['parent_id'];
+        }
+
+        $breadcrumbs = array_reverse($breadcrumbs, true);
+        $breadcrumbs[] = $breadcrumb['name'];
+
+        return $breadcrumbs;
+    }
+
+    private static function getBreadCrumbById($id)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT bdb.*, bd.name, bd.alias
+                FROM block_diagram_breadcrumbs bdb
+                JOIN block_diagrams bd ON bd.id = bdb.block_diagram_id
+                WHERE bdb.id = :id'
+        )-&gt;queryRow(true, array(':id' =&gt; $id));
+    }
+
+    private static function getBreadCrumb($alias)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT bdb.*, bd.name
+                FROM block_diagram_breadcrumbs bdb
+                JOIN block_diagrams bd ON bd.id = bdb.block_diagram_id
+                WHERE bd.alias = :alias'
+        )-&gt;queryRow(true, array(':alias' =&gt; $alias));
+    }
+
+    private static function getParentBreadcrumbID($id)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT id
+                FROM block_diagram_breadcrumbs
+                WHERE block_diagram_id = :id'
+        )-&gt;queryScalar(array(':id' =&gt; $id));
+    }
+
+    private static function getParentDiagramID($id)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT bds2.block_diagram_id FROM block_diagram_breadcrumbs bds1
+              JOIN block_diagram_breadcrumbs bds2 ON bds2.id = bds1.parent_id
+              WHERE bds1.block_diagram_id = :id'
+        )-&gt;queryScalar(array(':id' =&gt; $id));
+    }
+
+    private static function shiftRows($id, $row)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'UPDATE block_diagram_items
+              SET row = row - 1
+              WHERE block_diagram_id = :id AND row &gt; :row'
+        )-&gt;execute(array(':id' =&gt; $id, ':row' =&gt; $row));
+    }
+
+    private static function deleteRow($id, $row)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'DELETE FROM block_diagram_items
+              WHERE block_diagram_id = :id AND row = :row'
+        )-&gt;execute(array(':id' =&gt; $id, ':row' =&gt; $row));
+    }
+
+    private static function getLastRowNumber($id)
+    {
+        return (int)self::db()-&gt;createCommand(
+            'SELECT row
+                FROM block_diagram_items
+                WHERE block_diagram_id = :id
+                ORDER BY row DESC'
+        )-&gt;queryScalar(array(':id' =&gt; $id));
+    }
+
+    private static function collectDiagram($columns, array $items)
+    {
+        switch ($columns)
+        {
+            case 'two':
+                $columns = 2;
+                break;
+            case 'three':
+                $columns = 3;
+                break;
+            case 'four':
+                $columns = 4;
+                break;
+            default:
+                throw new Exception('wrong number of columns');
+        }
+        $diagram = array();
+        $row = array();
+
+        foreach ($items as $i =&gt; $item)
+        {
+            if ($i && $i % $columns == 0)
+            {
+                array_push($diagram, $row);
+                $row = array();
+            }
+
+            $block = array();
+
+            foreach (array('class', 'content', 'url', 'type') as $key)
+            {
+                $block[$key] = !empty($item[$key]) ? $item[$key] : '';
+            }
+
+            self::parseArrows($block['arrows'], $item);
+
+            array_push($row, $block);
+        }
+
+        return $diagram;
+    }
+
+    private static function parseArrows(&$arrows)
+    {
+        if (!empty($arrows))
+        {
+            foreach (str_split($arrows) as $direction)
+            {
+                $direction = strtolower($direction);
+                switch ($direction)
+                {
+                    case 'u':
+                        $ar_dir = 'up';
+                        break;
+                    case 'r':
+                        $ar_dir = 'right';
+                        break;
+                    case 'd':
+                        $ar_dir = 'down';
+                        break;
+                    case 'l':
+                        $ar_dir = 'left';
+                        break;
+                }
+                $arrows[$ar_dir] = !empty($item['text_' . $direction]) ? $item['text_' . $direction] : '';
+            }
+        }
+
+        return $arrows;
+    }
+
+    private static function getDiagramBlocks($id)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+                `type`,
+                `class`,
+                content,
+                url,
+                arrows,
+                text_u,
+                text_r,
+                text_d,
+                text_l
+            FROM block_diagram_items WHERE block_diagram_id = :id ORDER BY row ASC, `column` ASC'
+        )-&gt;queryAll(true, array(':id' =&gt; $id));
+    }
+
+    private static function getDiagram($alias)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT `id`, `alias`, `columns`, `name` FROM block_diagrams WHERE alias = :alias'
+        )-&gt;queryRow(true, array(':alias' =&gt; $alias));
+    }
+
+    private static function getDiagramBlock($id, $row, $column)
+    {
+        return self::db()-&gt;createCommand(
+            'SELECT
+              *
+            FROM block_diagram_items
+            WHERE block_diagram_id = :id AND row = :row AND `column` = :column'
+        )-&gt;queryRow(true, array(
+            ':id' =&gt; $id,
+            ':row' =&gt; $row,
+            ':column' =&gt; $column
+        ));
+    }
+
+    private static function hasDiagram($alias)
+    {
+        return (bool)self::db()-&gt;createCommand(
+            'SELECT 1 FROM block_diagrams WHERE alias = :alias'
+        )-&gt;queryScalar(array('alias' =&gt; $alias));
+    }
+
+    public static function createAbsUrl($path = '', $params = array(), $protocol = null)
+    {
+        $protocol || $protocol = substr($_SERVER["SERVER_PROTOCOL"], 0, strpos($_SERVER["SERVER_PROTOCOL"], '/'));
+
+        return strtolower(Yii::app()-&gt;createAbsoluteUrl($path, $params, $protocol));
+    }
+
+}
