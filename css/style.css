@@ -178,8 +178,8 @@ aside > a {
 }
 
 aside > a > img.company {
-    width: 250px;
-    padding: 3px;
+    width: 246px;
+    margin: 0 2px;
     border: solid 1px #EFEFEF;
 }
 
@@ -187,6 +187,10 @@ aside > a:hover > img.company {
     -moz-box-shadow: 1px 1px 3px #999;
     -webkit-box-shadow: 1px 1px 3px #999;
     box-shadow: 1px 1px 3px #999;
+}
+
+aside > a > img.company.unnamed {
+    height: 180px;
 }
 
 aside > a > img.company.itcraft {
