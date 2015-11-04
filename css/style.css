@@ -303,3 +303,25 @@ aside > a:focus img {
     -moz-transform: translateX(0px);
     transform: translateX(0px);
 }
+
+.icon {
+    display: block;
+    padding: 0px 0 4px 32px;
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.football {
+    background: url(../img/football.png) no-repeat;
+    background-size: contain;
+}
+
+.billiards {
+    background: url(../img/ball-8.png) no-repeat;
+    background-size: contain;
+}
+
+.poker {
+    background: url(../img/poker.png) no-repeat;
+    background-size: contain;
+}
