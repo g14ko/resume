@@ -325,3 +325,22 @@ aside > a:focus img {
     background: url(../img/poker.png) no-repeat;
     background-size: contain;
 }
+
+/* footer styles */
+
+footer a {
+    float: left;
+    margin-left: 4px;
+    padding: 0;
+    width: 36px;
+    height: 36px;
+    border: 2px solid rgba(51, 122, 183, .6);
+    text-decoration: none;
+    border-radius: 18px;
+    box-shadow: inset 0 0 16px rgba(51, 122, 183, .9);
+}
+
+footer a img {
+    width: 32px;
+    opacity: .7;
+}
