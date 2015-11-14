@@ -63,12 +63,21 @@ body {
     margin: 12px;
     border: 5px solid whitesmoke;
     box-shadow: 0 0 3px #999999, inset 0 0 3px #999999;
+    background: rgba(255, 255, 255, .6);
+}
+
+#avatar:hover {
+    background: rgba(255, 255, 255, .75);
 }
 
 #avatar img {
     width: 96px;
     margin-top: 6px;
-    opacity: .7;
+
+    opacity: .6;
+
+    -webkit-filter: sepia(.3) brightness(1.01);
+    filter: sepia(.3) brightness(1.01);
 }
 
 #developer {
@@ -93,8 +102,9 @@ body {
     position: absolute;
     color: #337ab7;
     content: '\f073';
-    left: 12px;
-    top: 4px;
+    left: 13px;
+    top: 1px;
+    font-size: 12px;
 }
 
 .city:before {
@@ -102,8 +112,9 @@ body {
     position: absolute;
     color: #337ab7;
     content: '\f041';
-    left: 12px;
-    top: 4px;
+    left: 13px;
+    top: -1px;
+    font-size: 18px;
 }
 
 .mobile:before {
@@ -112,7 +123,8 @@ body {
     color: #337ab7;
     content: '\f095';
     left: 12px;
-    top: 4px;
+    top: 0;
+    font-size: 16px;
 }
 
 .email:before {
@@ -120,8 +132,9 @@ body {
     position: absolute;
     color: #337ab7;
     content: '\f0e0';
-    left: 12px;
-    top: 4px;
+    left: 11px;
+    top: 0px;
+    font-size: 14px;
 }
 
 .skype:before {
@@ -129,8 +142,9 @@ body {
     position: absolute;
     color: #337ab7;
     content: '\f17e';
-    left: 12px;
-    top: 4px;
+    left: 11px;
+    top: -1px;
+    font-size: 16px;
 }
 
 .label {
@@ -184,9 +198,10 @@ aside > a > img.company {
 }
 
 aside > a:hover > img.company {
-    -moz-box-shadow: 1px 1px 3px #999;
-    -webkit-box-shadow: 1px 1px 3px #999;
-    box-shadow: 1px 1px 3px #999;
+    transition: background-color .7s;
+    background-color: rgba(0, 0, 0, .1);
+    box-shadow: inset -1px 0 5px rgba(255, 255, 255, .7);
+    border-radius: 8px;
 }
 
 aside > a > img.company.unnamed {
@@ -222,13 +237,13 @@ aside > a:focus:after {
     font-weight: bold;
     line-height: 16px;
     text-align: center;
-    color: #000;
+    color: rgba(0, 0, 0, .9);
     background: rgba(255, 255, 255, .9);
 }
 
 aside > a:hover img,
 aside > a:focus img {
-    outline: 1px solid #ccc;
+    outline: 1px solid rgba(0, 0, 0, .1);
 }
 
 /* Avatar styles */
@@ -239,10 +254,9 @@ aside > a:focus img {
     left: 128px;
     font-size: 40px;
     font-family: 'Sigmar One', cursive;
-
-    text-shadow: -1px -1px 1px whitesmoke, 1px 1px 1px black;
-    color: darkorange;
-    opacity: 0.4;
+    text-shadow: 0 0 4px rgba(255, 255, 255, .9), 1px 1px 1px rgba(0, 0, 0, .3);
+    color: rgba(255, 165, 0, .6);
+    opacity: .7;
 }
 
 #objective {
@@ -335,10 +349,16 @@ footer a {
     padding: 0;
     width: 36px;
     height: 36px;
-    border: 2px solid rgba(51, 122, 183, .6);
+    border: 2px solid rgba(51, 122, 183, .5);
     text-decoration: none;
     border-radius: 18px;
-    box-shadow: inset 0 0 16px rgba(51, 122, 183, .9);
+    box-shadow: inset 0 0 16px rgba(51, 122, 183, .7);
+}
+
+footer a:hover {
+    background: rgba(255, 255, 255, .9);
+    border-color: rgba(51, 122, 183, .6);
+    box-shadow: inset 0 0 8px rgba(51, 122, 183, .9), 0 0 4px rgba(255, 255, 255, .9);
 }
 
 footer a img {

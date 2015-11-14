@@ -55,9 +55,8 @@ body {
     float: left;
     width: 250px;
     margin-left: -250px;
-    padding: 4px;
+    padding: 2px 12px;
     position: relative;
-    /*background: #FFACAA;*/
 }
 
 
