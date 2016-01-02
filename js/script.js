@@ -27,15 +27,14 @@ $(function () {
             lang = a.parent('p').prev('h4'),
             company = lang.parent('div').prevAll('.company:first'),
             id = company.text() + '-' + a.text().substring(0, a.text().indexOf('.')),
-            code = a.next('#'+id);
+            code = a.next('#' + id);
 
-        if(code.length == 0)
-        {
+        if (code.length == 0) {
             $.get($(this).prop('href'), function (data) {
 
                 a.after('<pre id="' + id + '"><code class="' + lang.text() + '">' + data + '</pre></code>');
 
-                $('#'+id+' code').each(function(i, block) {
+                $('#' + id + ' code').each(function (i, block) {
                     hljs.highlightBlock(block);
                 });
 
@@ -44,6 +43,29 @@ $(function () {
             code.toggle(!code.is(':visible'));
         }
 
+    });
+
+    $("a.export-to-word").click(function (e) {
+        e.preventDefault();
+
+        var resume = $("#export");
+
+        if (!resume.hasClass('collected')) {
+            resume.append($(".header").clone());
+
+            //var body = $(".accordion-wrapper").clone();
+            //console.log(body.find('.code-examples, .code-examples ~ div'));
+            //body.find('.code-examples, .code-examples ~ div').remove();
+            //console.log(body.find('p'));
+            //return false;
+
+            var body = $(".accordion-wrapper").clone();
+            body.find('.code-examples, .code-examples ~ div').remove();
+            resume.append(body);
+            resume.addClass('collected');
+        }
+
+        resume.wordExport();
     });
 
 

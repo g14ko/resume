@@ -9,12 +9,14 @@
     <meta name="description" content=""/>
 
     <link rel="icon" href="favicon.ico">
-    <link rel="apple-touch-icon" href="favicon.ico" />
+    <link rel="apple-touch-icon" href="favicon.ico"/>
 
+    <link href='https://fonts.googleapis.com/css?family=Frijole' rel='stylesheet' type='text/css'>
     <link href='https://fonts.googleapis.com/css?family=Sigmar+One' rel='stylesheet' type='text/css'>
     <link href='https://fonts.googleapis.com/css?family=Shadows+Into+Light' rel='stylesheet' type='text/css'>
     <link href='https://fonts.googleapis.com/css?family=Amatic+SC:400,700' rel='stylesheet' type='text/css'>
     <link href='https://fonts.googleapis.com/css?family=Oxygen:400,300' rel='stylesheet' type='text/css'>
+    <link href='https://fonts.googleapis.com/css?family=Roboto' rel='stylesheet' type='text/css'>
 
     <link href="css/reset.css" rel="stylesheet">
     <link href="css/layout.css" rel="stylesheet">
@@ -26,9 +28,11 @@
     <!--[if lt IE 9]>
     <script src="http://html5shiv.googlecode.com/svn/trunk/html5.js"></script><![endif]-->
     <script src="js/jquery-2.1.4.min.js"></script>
+    <script src="js/FileSaver.min.js"></script>
+    <script src="js/jquery.wordexport.js"></script>
+    <script src="js/highlight.min.js"></script>
     <script src="js/script.js"></script>
     <script src="js/accordion.js"></script>
-    <script src="js/highlight.min.js"></script>
 
 </head>
 
@@ -39,8 +43,11 @@
     <header class="header"></header>
 
     <p id="objective">
-        <a href="#">To obtain a position of PHP Web Developer on high load project</a>
+        <a href="#">to obtain a position of Web Developer on high load project</a>
     </p>
+
+    <a href="#" class="export-to-word">Export</a>
+    <div id="export" style="display: none"></div>
 
     <div class="middle">
 
