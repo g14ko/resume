@@ -32,17 +32,19 @@
     font-weight: bold;
     color: rgba(0, 0, 0, .7);
     font-family: 'Oxygen', sans-serif;
+    line-height: 12px;
 }
 
 .accordion h3 {
     display: inline-block;
     margin: 0 0 2px 16px;
     padding: 0 8px 2px 24px;
-    border-radius: 10px;
+    border-radius: 3px;
     background-image: url(../img/tweed.png);
     color: whitesmoke;
     font-family: 'Oxygen', sans-serif;
     font-size: 12px;
+    line-height: 17px;
 }
 
 .accordion h4 {
@@ -72,7 +74,7 @@
 }
 
 .accordion p a.file {
-    margin-left: 16px;
+    margin-left: 22px;
     color: rgba(0, 0, 0, .7);
     font-family: 'Oxygen', sans-serif;
     font-size: 12px;
@@ -123,4 +125,6 @@
     position: absolute;
     content: '\f1c9';
     left: 28px;
+    font-size: 18px;
+    opacity: .8;
 }
